@@ -6,17 +6,22 @@ on:
 
 jobs:
   community-standalone:
-    # The open-core boundary, enforced. Community is checked out WITHOUT
-    # factory-pro/ present and must install, typecheck, lint and test anyway.
-    # If this job ever needs the commercial workspace to pass, the boundary
-    # has been broken — widen @factory/plugin-sdk instead of relaxing this.
+    # The open-core boundary, enforced by the repository itself.
+    #
+    # This used to check out the *pair* and `rm -rf factory-pro` to simulate the
+    # commercial workspace being absent. It cannot any more, and does not need
+    # to: Community and Pro are separate repositories, so factory-pro/ is not in
+    # this checkout and never will be. Every run here is a standalone run by
+    # construction, which is a stronger guarantee than a deletion step.
+    #
+    # If this job ever needs the commercial workspace to pass, the boundary has
+    # been broken — widen @factory/plugin-sdk instead of relaxing this.
+    #
+    # `scripts/verify-standalone.sh` is the version to run on a working tree
+    # that does have factory-pro/ beside it.
     runs-on: ubuntu-latest
-    defaults:
-      run: { working-directory: factory-community }
     steps:
       - uses: actions/checkout@v4
-      - run: rm -rf factory-pro
-        working-directory: .
       - uses: actions/setup-node@v4
         with: { node-version: '24' }
       - run: corepack enable pnpm
