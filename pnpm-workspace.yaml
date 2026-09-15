@@ -1,0 +1,24 @@
+# Xaedalon Factory — Community workspace.
+#
+# NOTE: `../factory-pro` is deliberately absent and must stay absent.
+# The open core must build, test and run with factory-pro/ deleted from disk
+# (see .github/workflows/ci.yml -> "community-standalone"). Keeping the
+# commercial workspace out of this list makes the bad dependency
+# *unresolvable* rather than merely discouraged.
+packages:
+  - 'packages/*'
+  - 'packages/plugins/*'
+  - 'apps/*'
+minimumReleaseAgeExclude:
+  - '@types/node@26.5.0'
+  - '@typescript-eslint/eslint-plugin@8.70.0'
+  - '@typescript-eslint/parser@8.70.0'
+  - '@typescript-eslint/project-service@8.70.0'
+  - '@typescript-eslint/scope-manager@8.70.0'
+  - '@typescript-eslint/tsconfig-utils@8.70.0'
+  - '@typescript-eslint/type-utils@8.70.0'
+  - '@typescript-eslint/types@8.70.0'
+  - '@typescript-eslint/typescript-estree@8.70.0'
+  - '@typescript-eslint/utils@8.70.0'
+  - '@typescript-eslint/visitor-keys@8.70.0'
+  - typescript-eslint@8.70.0

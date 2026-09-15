@@ -1,0 +1,12 @@
+{
+  "name": "@factory/events",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Typed event bus — the spine every capability subscribes to.",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": { "build": "tsc --build" }
+}

@@ -1,0 +1,43 @@
+# OpenAI Codex CLI.
+#
+# NOT VERIFIED. The `codex` binary was not installed on the machine this was
+# written on, so the flags below are a plausible shape rather than a checked
+# one. They are marked provisional, which makes `factory doctor` say so out
+# loud instead of letting someone find out when a run fails on an unrecognised
+# flag.
+#
+# To verify: install the CLI, run `codex --help`, correct the fields below, and
+# drop the `provisional` flag. Nothing else has to change — a provider is data.
+kind: factory.provider/v1
+id: codex
+displayName: OpenAI Codex
+summary: OpenAI's coding agent.
+command: codex
+install: npm install -g @openai/codex
+docs: https://developers.openai.com/codex/cli/
+
+supports:
+  - non_interactive
+  - tool_use
+  - file_access
+
+models:
+  strong: gpt-5-codex
+  balanced: gpt-5-codex
+  fast: gpt-5-codex-mini
+
+promptFlag: '--prompt'
+modelFlag: '--model'
+
+session:
+  mode: none
+
+permissionArgs: []
+extraArgs: []
+stdin: /dev/null
+env: {}
+
+provisional: true
+provisionalNote: >-
+  Install the Codex CLI and run `codex --help`, then correct
+  packages/plugins/provider-codex/provider.yaml and remove this flag.

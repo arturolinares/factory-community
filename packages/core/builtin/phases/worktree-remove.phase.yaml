@@ -1,0 +1,7 @@
+kind: factory.phase/v1
+name: worktree-remove
+description: Remove the task's worktree and prune git's record of it.
+steps:
+  - uses: worktree
+    action: remove
+    path: "{{ project.worktrees }}/{{ task.directory }}"

@@ -1,0 +1,11 @@
+{
+  "name": "@factory/task-diffity",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Reviews a task's changes in Diffity.",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": { "build": "tsc --build" },
+  "dependencies": { "@factory/plugin-sdk": "workspace:*" }
+}

@@ -1,0 +1,763 @@
+# Xaedalon Factory
+
+> **Don't replace your tools. Orchestrate them.**
+
+Factory is a local-first orchestration layer for agentic software development. It runs the coding
+agents you already have — Claude Code, Codex, Copilot, and whatever comes next — against your
+repositories, sequencing them through workflows with tests, evidence, and human approval gates.
+
+It is not a model, an IDE, or a coding agent. It decides *when* an agent runs, *what* it works on,
+*what it may touch*, *who verifies the result*, and *what is recorded*.
+
+This document is the source of truth, written as the project is built.
+
+---
+
+## Status
+
+**Three increments in, and the whole loop works**: author a workflow in the browser or by hand,
+point a task at a repository, queue it, and the daemon gives it a worktree, runs the agents, keeps
+what they printed and what they produced, stops at the gate you asked for, and continues when you
+approve. From a terminal, from the board, or from Pro's desktop app — the same API either way.
+2,292 Gherkin steps green below the browser, 60 browser scenarios, and a smoke run against a real
+installation.
+
+`factory setup` is where a new machine starts: what is still missing, and the command that fixes
+each one. It is a registry, so the answer comes from whoever knows it — the provider plugins, the
+engine, and Pro.
+
+Increment 1 — **capability core + definition layer**. Authoring, storing, resolving, validating and
+sharing workflow and phase definitions, plus a foreground runner that proves the contract is
+executable. No persistence, no scheduler, no task lifecycle yet.
+
+| Step | | |
+|---|---|---|
+| 0 | Both workspaces, toolchain, boundary enforcement | ✅ done |
+| 1 | `@factory/events` — typed event bus | ✅ done |
+| 2 | Capability host, registries, hooks, conformance suite | ✅ done |
+| 3 | Definition schemas; `shell` + `agent` as registered built-ins | ✅ done |
+| 4 | YAML parser/serializer, `writeNew` / `updateExisting` | ✅ done |
+| 5 | `packages/config` — scope discovery and layered resolution | ✅ done |
+| 6 | `packages/plugin-sdk` + the three provider plugins | ✅ done |
+| 7 | `resolvePlan()` — definitions become an executable plan | ✅ done |
+| 8 | `apps/cli` — init, list, show, why, doctor, capabilities | ✅ done |
+| 9 | Bundles — self-contained export/import | ✅ done |
+| 10 | `apps/daemon` — the definitions API | ✅ done |
+| 11 | `apps/web` shell — list pages with scope and shadow badges | ✅ done |
+| 12 | The builder — form mode, workflows and phases | ✅ done |
+| 13 | Completing the authoring interface (YAML stays a view) | ✅ done |
+| 14 | Import and export in the UI | ✅ done |
+| 15 | `factory run` — the foreground executor | ✅ done |
+| 16 | `factory-pro` desktop capability | ✅ done |
+
+**Increment 1 complete.** 1,060 Gherkin steps below the browser, 44 in a real browser, 49 in
+`factory-pro`.
+
+---
+
+## Increment 2 — the engine
+
+Increment 1 built the definition layer and proved it executable. Increment 2 makes a workflow
+something you *start* rather than something you run and watch: a task that outlives the command that
+created it, a scheduler that decides when it moves, and a record of what happened.
+
+| Step | | |
+|---|---|---|
+| 17 | `packages/store` — persistence with real migrations | ✅ done |
+| 18 | The **Task** entity, and one module that owns every transition | ✅ done |
+| 19 | Runs, steps and logs — what happened, kept | ✅ done |
+| 20 | The engine — a task and a plan become a run, plus boot reconciliation | ✅ done |
+| 21 | The scheduler — queue, concurrency cap, parallel and sequential lanes | ✅ done |
+| 22 | Condition flags — `hasWorktree` and friends, set by the workflows that earn them | ✅ done |
+| 23 | `on_fail` recovery, and loops (lifting the runner's refusal) | ✅ done |
+| 24 | Tasks API and a live event stream | ✅ done |
+| 25 | The task board — the screen the mockups describe | ✅ done |
+| 26 | Doctor for a running installation (reconciliation landed in 20) | ✅ done |
+
+**Decisions taken at the start of the increment**
+
+- **`node:sqlite`, not `better-sqlite3`.** A native build means someone can clone Factory and fail
+  to install it; an experimental API behind one wrapper module is the smaller risk, and swapping it
+  is one file. WAL, foreign keys, transactions and `user_version` are all verified working. The
+  experimental warning is suppressed inside the store by patching `process.emitWarning` before the
+  import — no CLI flag, nothing for a caller to remember.
+- **One module owns state transitions.** The prototype's worst bug class came from `approve`,
+  `retry`, `run`, `archive` and the scheduler each calling `transition()` with their own pre- and
+  post-logic, while the UI re-encoded the rules as scattered conditionals that drifted. Here every
+  path goes through one place, and the API publishes the allowed actions for a state so no client
+  has to guess.
+- **Migrations are versioned and irreversible-by-default.** The prototype had fourteen idempotent
+  `ALTER TABLE`s in a try/catch with no version record, so nobody could say what shape a database
+  was in. `user_version` and an ordered list, applied in a transaction.
+
+**What increment 2 added**
+
+Tasks that outlive the command that made them, runs that record what happened, a scheduler that
+decides what starts, an engine that runs it, a live API and the board that watches it. 1,787
+Gherkin steps green below the browser plus 53 browser scenarios (`pnpm test:e2e`).
+
+---
+
+## Increment 3 — where the work happens
+
+Everything so far ran wherever the daemon was started. That was the last thing standing between
+Factory and its own premise: agents working in parallel need somewhere separate to work, and a
+person running Factory has more than one repository.
+
+| Step | | |
+|---|---|---|
+| 27 | **Projects** — a task belongs to a repository, not to the daemon's working directory | ✅ done |
+| 28 | **Worktrees** — isolation that is earned: `hasWorktree` set by the workflow that creates one | ✅ done |
+| 29 | **Evidence** — a phase's `artifact` collected and attached to the run | ✅ done |
+| 30 | Examples and documentation, and the daemon serving the board | ✅ done |
+| 31 | `factory task` — the board's work from the command line | ✅ done |
+| 32 | Step retries — `retries` on any step, of any kind | ✅ done |
+| 33 | **Pro's desktop shell** — an Electron window around the local engine | ✅ done |
+| 34 | **Finding the agent** — configured, then PATH, then where things are installed | ✅ done |
+| 35 | **The setup checklist** — a registry of what is still missing | ✅ done |
+| 36 | **Projects that work in place** — no worktree, and one task at a time | ✅ done |
+
+**What increment 3 added**
+
+Projects, so work happens in a repository rather than wherever the daemon started. Worktrees, so
+agents working at the same time are not in each other's files — as a step kind a workflow asks for,
+with `hasWorktree` earned by the workflow that creates one. Evidence, so an approval is decided on
+what was actually produced. `factory task`, so none of it requires a browser. Step retries, because
+agent CLIs fail transiently. And the daemon serves the board itself, so a working installation is
+one process.
+
+2,085 Gherkin steps green below the browser, plus 58 browser scenarios (`pnpm test:e2e`), and a
+smoke run against a real installation each time an increment closes.
+
+**Measured against the plan's Community capability list**, everything is present except one thing
+that needs no code: *environment isolation* beyond worktrees — a `hasEnvironment` flag, a workflow
+that provides it and one that requires it, written the same way `worktree-create` is. `permission
+controls` was removed deliberately; it belonged to a different project.
+
+---
+
+## Increment 4 — the board knows which project you are in
+
+The board was built one page at a time and had no idea which repository you were working in. Tasks
+from every project sat in one list, and — worse — the daemon resolved *definitions* through a single
+scope chain built from its own working directory. A workflow committed to a repository was invisible
+to that repository's own tasks unless you happened to launch the daemon inside it.
+
+| Step | | |
+|---|---|---|
+| 37 | **A project's own scope chain** — definitions resolved from the project, not from the daemon's cwd | ✅ done |
+| 38 | **The project rail** — a square per project, and what the board is about | ✅ done |
+| 39 | **New task as a page**, with workflows as an ordered list | ✅ done |
+| 40 | **Replanning a task** until it starts carrying the plan out | ✅ done |
+
+**What increment 4 added**
+
+`apps/daemon/src/chains.ts`: one answer to "which definitions can this project see", used by the
+planner, the scheduler, the doctor and every definition route. `?project=<id>` on the definition,
+bundle, scope and plan routes — on the writes as much as the reads, because once a list is filtered,
+saving a workflow you opened from it has to land back in the project rather than forking a copy into
+the daemon's own scope. An unknown id is 404, never a quiet fall back to somewhere else.
+
+A rail of project squares left of the navigation, identity derived from the name (`apps/web/src/
+identity.ts`) so adding a project needs no decision and no migration. Choosing one narrows the tasks,
+the workflows, the phases and the scope chain. The choice is remembered in `localStorage` — the first
+persisted UI state in the app.
+
+A task's workflows are now shown as what they are: a numbered, reorderable list, editable everywhere
+except `running` and `awaiting_approval`, refused by the daemon in those two states as well.
+
+**Three bugs it fixed on the way**, all of them older than the feature:
+
+- The engine planned every task with the daemon's chain, so a project's own workflows could not run.
+- `TaskRepository.assign()` never reset `nextWorkflow`. A task blocked at the third of five,
+  reassigned to two workflows and retried, resumed past the end of the list and completed having run
+  nothing at all.
+- `PATCH /api/tasks/:id` had no state guard: a running task's plan could be rewritten mid-run.
+
+2,565 Gherkin steps green below the browser, plus 77 browser scenarios.
+
+---
+
+## Increment 5 — agents, environments, and what a project must own
+
+One theme and three repairs. The theme: **a project's setup is its own.** Where a worktree goes
+differs per repository; how an environment is built differs far more. Both shipped as built-ins
+every project silently shared, and nothing said a project ought to have its own. Meanwhile an
+agent's settings — provider, model, effort — were retyped into every step, so changing which model
+did the work meant editing every phase that mentioned it.
+
+| Step | | |
+|---|---|---|
+| 41 | **Agents** — a third definition kind, and `- agent: developer` on a step | ✅ done |
+| 42 | **Environments** — opt-in per project, three built-in workflows, a page | ✅ done |
+| 43 | **`override: required`** — a built-in that asks each project for its own copy | ✅ done |
+| 44 | **Renaming a task**, and the left menu grouped into sections | ✅ done |
+| 45 | **Bounded fields become controls**, including sets no schema can hold | ✅ done |
+
+**What increment 5 added**
+
+`agents/<name>.agent.yaml` resolves through the scope chain like anything else, so a project's own
+agents work in that project for free. A step names one with `- agent: developer`, the same shorthand
+`- run:` already had, and then **the only other thing it needs is a prompt**: the six fields an agent
+answers for are declared `x-supersededBy: agent` and the builder stops asking. They stay valid — the
+step still wins wherever it says something — but an override is offered rather than implied, and a
+value already on a step is never hidden. Bundles carry the agents their phases reference, because
+"self-contained" is a stated guarantee.
+
+Environments are opt-in per project — `usesEnvironments` beside `usesWorktrees`, off by default
+because Factory cannot build one unaided. Turning either setting on copies the definitions it needs
+into the project's `.factory`, ready to edit and commit. Tracking is the `hasEnvironment` flag, not a
+new table: `environment-create` earns it and `environment-delete` clears it, so the Environments page
+cannot drift from what actually ran.
+
+The requirement is **declared, never recognised**. A workflow says `override: required` about itself
+and doctor reads the declaration — reported on *use*, so a project that never assigns
+`worktree-create` never hears about it. The prototype switched on workflow names in the engine, and
+that is the mistake this shape exists to avoid.
+
+`x-options` on a step field names a catalogue the builder fills at render time — providers, agents,
+models. A static enum cannot express these: which providers are installed is a fact about the
+machine and which agents exist is a fact about the project. A plugin's step kind now gets a real
+dropdown by declaring one, with no change to the UI.
+
+**Four bugs it fixed on the way**, all older than the feature:
+
+- A shell step's `working_dir` was parsed, documented, round-tripped and rendered in the builder, and
+  **never read**. Deleted: where a step runs is the phase's and the project's business.
+- `writeNew` crashed on a definition without `extensions`, so a POST that omitted it was a 500 —
+  for every kind, not just agents.
+- `SchemaFields` wrote `NaN` into a definition, and from there into YAML, for any numeric field
+  typed into badly.
+- The serializer-exhaustiveness suite enumerated kinds by hand, so a new kind could ship with an
+  unverified writer and the suite would stay green. It now walks the field tables and asserts it
+  checked all of them — a guard on the guard.
+
+2,742 Gherkin steps green below the browser, plus the browser suite.
+
+---
+
+## Increment 6 — artifacts a task owns, under a directory Xaedalon owns
+
+Three changes that turn out to be one idea.
+
+`artifact` was a promise nobody was told about: a phase declared a path, the engine looked there
+afterwards, and the agent's prompt went through verbatim — so you repeated the path by hand and
+nothing checked the two halves matched until the run was over. `.factory` was the wrong name for a
+shared idea, because Factory is one of a family of Xaedalon products and every one of them will need
+somewhere to put files that belong to the product rather than to the repository. And a task had
+nowhere for its output to live, which is why evidence only ever existed inside a database.
+
+| Step | | |
+|---|---|---|
+| 46 | **`.xaedalon/.factory`** — the scope moves, the old path still read | ✅ done |
+| 47 | **A task's own directory** — artifacts, versioned, gitignored | ✅ done |
+| 48 | **`artifact` on an agent step**, with the path appended to the prompt | ✅ done |
+| 49 | **`{{ task.artifacts }}`**, so a later phase can read an earlier one's work | ✅ done |
+
+**What increment 6 added**
+
+`packages/core/src/task/paths.ts` is the one module that answers "where does a Xaedalon product put
+this" — shaped for the rest of the family, used by Factory today. A run writes
+`.xaedalon/.factory/tasks/<task>/artifacts/<name>/<name>.md` plus a dated copy under `versions/`, in
+the **project** rather than the worktree, because a worktree is deleted when the work in it ends.
+
+An agent step names what it will produce — `artifact: analysis`, always Markdown, so a name is the
+whole of it — and Factory appends the path to the prompt. That reverses an earlier judgement, and
+the reason changes with it: the path is *derived* now, so nobody could have written it into the
+prompt themselves, and telling the agent is the only way the promise can be kept. `describe` is still
+computed from the prompt as written, so the run timeline shows what was asked for rather than
+Factory's own sentence.
+
+Both scopes moved. **Nothing is relocated for you** — the old path is still read and doctor names the
+`git mv` — which matters more than it sounds: `openStore` creates a database at whatever path the
+chain resolves, so a rename without that fallback would have shown an empty board while every task
+and run sat unharmed where it had always been.
+
+**Two bugs it fixed on the way:**
+
+- `resolvePlan` had a **binary** `join` while `Join` is variadic, so `artifactFile(root, name, file)`
+  silently dropped the filename. The prompt named `analysis/analysis.md` and the collector looked at
+  `analysis/` — two implementations of one idea, and the one that was wrong was the one nobody read.
+  There is one `joinPath` now, and a Rule that asserts the prompt and the plan name the same file.
+- `run_evidence` was keyed `(run_id, phase)`, which two artifacts in one phase would have silently
+  overwritten. Migration 10 rebuilds it keyed on `(run_id, name)`.
+
+Pro no longer calls `homedir()` anywhere: the licence resolves through `userScopeRoot` in the SDK,
+which is the mechanism binding rule 3 prescribes rather than a literal duplicated across the boundary.
+
+The third copy of the same mistake was in prose: doctor told you to edit `.factory/config.yaml`, a
+literal that survived the move and would have sent someone to a file that is not there.
+`availability()` takes the config file from its caller now, and doctor resolves it from the chain, so
+the message names the file that exists.
+
+**Worktrees stay beside the project, not under `.xaedalon/`.** A worktree is a git checkout rather
+than something a Xaedalon product wrote, and each project already stores its own absolute
+`worktreesRoot` — so moving the default would leave two conventions side by side for no gain. Where
+they go is the user's call; what the default and the projects page now both say is that they do not
+belong *inside* the project, which is a directory the project's own tooling would walk and index.
+
+2,853 Gherkin steps green below the browser, plus 88 browser scenarios. Verified end to end against
+the real installation: a real agent, told a derived path, wrote to it; the engine collected it, wrote
+a second version on the rerun, and `git status` never mentioned any of it.
+
+---
+
+## Increment 7 — a task's brief, and the vocabulary to write one in
+
+| # | What | State |
+|--:|------|-------|
+| 50 | **A task has a description**, editable in place like its name | ✅ done |
+| 51 | **`{{ task.description }}`**, so the brief reaches a prompt without being retyped | ✅ done |
+| 52 | **A token dictionary** in the phase builder, served from core's own list | ✅ done |
+
+Two pieces of feedback that turn out to share a cause: **the product knew things it never said.**
+
+`{{ task.directory }}` has worked since increment 3 and nothing anywhere announced it — the only way
+to discover a token was to read the daemon. And the vocabulary itself lived in four files with no way
+to disagree loudly. `packages/core/src/plan/tokens.ts` is now the single list, and
+`as const satisfies Record<keyof TaskContext, string>` makes drift a **build error in both
+directions**: documenting a token that does not exist is an excess property, and adding a field
+without documenting it fails the constraint. A type can only prove the keys match, so a scenario
+plans a step using every documented token and asserts the rendered command contains no `{{`.
+
+The dictionary is a collapsed `<details>` below the steps — once, not per step — and it is *served*,
+not typed into the page: `GET /api/registries/tokens`, beside step-kinds and providers. The two
+namespaces core cannot know, `workflow` and `phase`, come back marked `source: 'definition'` with no
+keys, and the editor fills them from the `variables:` it is already holding.
+
+A description is the other half. It is a **required** `string` defaulting to `''` (for prose, absent
+and empty are the same state), it has its own `describe()` rather than a second argument to
+`rename()` — that method carries a long warning about `directory` that has nothing to do with a
+brief — and `''` is valid for a description where it is refused for a name. Both freeze while a task
+is in flight, which is not tidiness: `{{ task.description }}` is read at plan time, so editing it
+mid-run would change a later phase's prompt underneath a run already going.
+
+`taskTokenValues` is total: every documented key present, `''` when the task has none. Otherwise the
+dictionary promises `ticketId` and the resolver tells you it does not exist.
+
+2,924 Gherkin steps green below the browser, plus 95 browser scenarios. Verified against the real
+installation: a task created with a description, queued, and `{{ task.description }}` substituted
+into the step it ran.
+
+---
+
+## Increment 8 — only offer what a project can actually run
+
+| # | What | State |
+|--:|------|-------|
+| 53 | **Availability by flag** — a workflow gated on a facility a project has off is not offered | ✅ done |
+
+A project with worktrees and environments both off was still offered all five workflows that manage
+them. Nothing provides `hasWorktree` there, so choosing one makes a task that waits for ever.
+
+The three-line fix was available and wrong: `PROJECT_SETTING_DEFINITIONS` maps a setting to workflow
+names, and its own comment forbids using it for this — those names decide which *starter files* to
+copy and nothing else, **so that renaming your copy of `worktree-create` breaks nothing.** So the
+match is on the flag, which is the vocabulary conditions are already written in. `unavailableFor`
+asks whether a workflow mentions — in `requires`, `provides` or `clears` — a flag the project can
+never hold. A user's own `spin-up` that declares `provides: [hasEnvironment]` is hidden on its
+conditions alone, and there is a scenario for exactly that.
+
+**Marked, not filtered.** The listing carries `unavailable: { flag, setting }`; the task picker drops
+those rows and the Workflows page keeps them, labelled `needs environments`. A file that exists has
+to stay openable and deletable — and a workflow already in a task's plan is still shown, so a plan
+made before the setting changed can be removed rather than silently disappearing.
+
+2,929 Gherkin steps green below the browser, plus 97 browser scenarios.
+
+---
+
+## Increment 9 — approval asks before *or* after
+
+| # | What | State |
+|--:|------|-------|
+| 54 | **`approval: before`** — ask, then run | ✅ done |
+| 55 | **`approval: after`** — run, show what came out, then ask (what `required` always meant) | ✅ done |
+
+Queueing `hello-world` greeted you and *then* asked permission. The code was not confused — the gate
+was deliberately a **review** gate, which is what makes collecting an artifact at one worth doing.
+It just could not express the other question anybody would ask of a gate: *may this happen at all?*
+
+So `approval` is `none | before | after`, and `required` is still read, meaning `after` — that is what
+every file already written means, and flipping them would fire their gates before the artifact they
+exist to show you.
+
+Everything turns on one number. `before` declines to `phaseIndex`, `after` to `phaseIndex + 1`, and
+the engine — which already derives its resume point from what was skipped — needed no change. Both
+ways of getting it wrong are worse than either behaviour alone: resume *past* an authorisation gate
+and you approve a phase and then skip it; resume *into* one without remembering the answer and it asks
+again for ever. Hence `RunOptions.approved`, and a scenario asserting the phase runs **exactly once**.
+
+`hello-world` now asks first, which is what anyone running it expects.
+
+3,013 Gherkin steps green below the browser, plus 97 browser scenarios.
+
+---
+
+## Increment 10 — four pieces of builder feedback
+
+| # | What | State |
+|--:|------|-------|
+| 56 | **Deleting returns to the list**, carrying what it revealed | ✅ done |
+| 57 | **Built-ins in their own table**, separate from what you wrote | ✅ done |
+| 58 | **`repeat`** — a loop says how many times, 1 to 100 | ✅ done |
+| 59 | **The phases picker looks like a picker** | ✅ done |
+
+"I'm not able to add phases" turned out to be the most interesting of the four. The Add button
+worked — driving the real UI proved it in a minute. What did not work was the *affordance*:
+`PhaseListEditor` used a raw `<input list>`, and Chromium hides a datalist's arrow until the pointer
+is over it. Seven phases were on offer and none of them were visible. It uses the shared `ComboInput`
+now, which has drawn its own chevron since increment 5 — a second implementation of a control we had
+already fixed once.
+
+Deleting used to leave you on the editor of a definition that no longer existed, behind a banner with
+a *Back* link. It navigates to the list instead, carrying the one sentence worth keeping: deleting a
+copy can *reveal* a copy in a lower scope, so the name still resolves — to something else. On the
+list, that sentence lands next to the row that proves it.
+
+`repeat` bounds a loop that previously ran until somebody noticed. The count is **derived** from
+completed runs at the same workflow position rather than stored, so nothing can disagree with it, and
+`repeat: 1` runs once — an off-by-one only a scenario asserting "once, not twice" would catch.
+
+3,066 Gherkin steps green below the browser, plus 101 browser scenarios.
+
+---
+
+## Increment 11 — a pipeline, and a token that only worked in the daemon
+
+`todolist` now has the chain it was being built for: **analysis → design → implement → validate →
+verify**, one workflow and one phase each, one agent step each, each declaring its own artifact and
+reading its predecessors by `{{ task.artifacts }}/<name>/<name>.md`.
+
+Writing them found a bug in Factory rather than in them. `factory run verify --dry-run` said
+`"{{ task.artifacts }}" does not resolve — "task" has no "artifacts". Available: description, name.`
+The wrapper was fine; the *token* failed, and only outside the daemon — which builds its context with
+`taskTokenValues` (total since increment 7) while the CLI built one by hand from its flags. Same
+idea, two implementations, and the hand-rolled one was the one nobody reads. The warning even
+presented the two keys that happened to be set as though they were the whole vocabulary.
+
+Fixed a level down, where the value is derived rather than in the caller that noticed:
+
+```ts
+task: asStrings({ ...blankTaskTokens(), ...(request.task ?? {}), artifacts })
+```
+
+`artifacts` last, deliberately — a caller's value for it is overridden rather than trusted, so the
+path the prompt promises and the path the collector reads cannot diverge. The same failure as the
+binary-`join` bug, this time prevented structurally instead of caught by a test.
+
+3,085 Gherkin steps green below the browser, plus 101 browser scenarios.
+
+---
+
+## Increment 12 — workflows that pull in what they need, and remember what has run
+
+| # | What | State |
+|--:|------|-------|
+| 60 | **`needs:`** — a workflow names its predecessor, and picking it brings in the chain | ✅ done |
+| 61 | **Ticks replace the invisible cursor** — each entry says whether it is still to run | ✅ done |
+| 62 | A workflow that has run **cannot be taken off** the task | ✅ done |
+
+**The second half began as a wrong premise, and checking it was the useful part.** The report was
+that re-running after a failure would repeat everything. It would not: `nextWorkflow` already
+resumed, and a scenario called *"A retry resumes at the workflow that failed"* has been passing since
+increment 3. But the cursor was an integer nothing rendered, and **any edit to the list reset it** —
+including a reorder — because a position in the old list means nothing in the new one. Editing the
+task is exactly what you do while fixing the failure, so the reset arrived at the worst moment.
+
+A correct mechanism nobody can see is not a working feature. So the cursor is gone, replaced by a
+tickbox per entry: unticked when the engine is finished with it, left ticked when it failed, and
+never removable once it has run. `ran` is derived from the runs — a stored copy would disagree the
+first time one was deleted — while `enabled` is stored, because it is the one thing the person sets.
+
+`needs:` is the other half. A workflow names only the workflow before it and Factory walks the chain,
+so ticking `verify` fills in analysis → design → implement → validate, and ticking it again on a list
+that already has `implement` adds only the three that are missing.
+
+3,259 Gherkin steps green below the browser, plus 107 browser scenarios. Migration 12 was rehearsed
+against a copy of the real database before it was trusted: every row preserved, foreign keys clean.
+
+---
+
+## Increment 13 — progress that means something, and artifacts you can read
+
+| # | What | State |
+|--:|------|-------|
+| 63 | **Progress counts phases** across the whole plan, not steps of the newest run | ✅ done |
+| 64 | **An Artifacts section** on the task, and a page that renders one | ✅ done |
+| 65 | The evidence header's path **links to the readable version** | ✅ done |
+
+The counter read `0/1` through a five-workflow run, and it was not broken — it measured *steps of the
+newest run*, exactly as its comment claimed. That comment was true when a task had one workflow. **A
+correct sentence about a system that has changed underneath it reads exactly like a correct
+sentence**, and nothing failed, so nothing drew attention to it. The interface reference settled
+the replacement: both mockups count phases.
+
+The first numerator I wrote had a bug the design review caught. Grouping by `(entry, phase)` across
+every run means a failed attempt poisons its phase permanently — fail, fix, retry and it reports 1 of
+3 for ever. **My own "ran twice" scenario missed it because both runs in it succeeded.** Grouping per
+run first makes each attempt its own witness. Three smaller corners went the same way: a recovery
+run's phases were credited to the entry that failed (the guard `#loopIsDone` already carries), a
+phase listed twice read two of three for ever, and a phase with no steps could never count at all.
+
+Artifacts are read out of the evidence rows rather than off disk — which is what evidence is copied
+into the database *for*, and which means the route takes a task and a name, so **there is no path to
+traverse**. The prototype's equivalent takes `?path=` and reads whatever it is handed. Its viewer
+also renders agent-written Markdown through `v-html` with no sanitiser; here that is one
+`MarkdownView` component with `DOMPurify` immediately above the `v-html`, and a scenario that was
+confirmed to fail when the sanitiser is taken out.
+
+3,365 Gherkin steps green below the browser, plus 112 browser scenarios.
+
+---
+
+## Increments 14–16 — where the work is, sessions by id, and the plugin seam
+
+| # | What | State |
+|--:|------|-------|
+| 66 | **A workspace row** on the task: the directory, copyable, and a way in | ✅ done |
+| 67 | **Session ids Factory chooses**, so a conversation can be resumed exactly | ✅ done |
+| 68 | **`task-tool`**: the buttons on a task come from plugins | ✅ done |
+| 69 | **Diffity** as a built-in plugin, and a **Plugins page** with switches | ✅ done |
+| 70 | **`settings.json`** and an interface scale up to 3× | ✅ done |
+
+Increment 14 shipped *without* its headline: the plan rested on `claude -c` resuming a task's
+session, every check agreed, and running the command proved it false — Claude's interactive
+`--continue` refuses the sessions `claude -p` creates, which is every session Factory makes. See
+the build notes, "A flag that exists is not a flag that works". Increment 15 was the fix: Factory
+mints the id, `--session-id` starts the session and `--resume` continues it, and the two are not
+interchangeable.
+
+Increment 16 was four requests that were one. "Open terminal" and "Open session" were buttons
+written into the board with their commands resolved by name inside a route; adding a diff viewer the
+same way would have made three, and a fourth would have been impossible. They are plugins now, and
+so is Diffity.
+
+**Two API changes**, recorded because this API is the contract a commercial edition builds on:
+
+- `POST /api/tasks/:id/terminal` is **gone**, replaced by `POST /api/tasks/:id/tools/:tool`. The
+  task detail's `workspace` lost `openable`, `command` and `session`, and gained a sibling `tools`.
+- `GET /api/capabilities` is **gone**. It grouped what was installed by kind, which the
+  `/api/registries/*` routes serve better, and it read the host — so it could show neither a plugin
+  that was switched off nor one that failed to load. `GET /api/plugins` reads the catalogue, which
+  is a superset.
+
+Pro calls neither (`desktop/src/main.ts` uses `/api/tasks`, `/api/tasks/:id` and
+`/actions/:action`), so nothing broke — but keeping either beside its replacement would have been
+one idea with two implementations, which is the thing this codebase refuses.
+
+## Glossary
+
+The vocabulary is deliberately small, and it is the vocabulary in the code.
+
+| Term | Meaning |
+|---|---|
+| **Task** | A unit of requested work — a ticket, a bug, a feature. (The prototype called this a "Requirement".) |
+| **Workflow** | An ordered list of phases, plus how it is scheduled and what happens when it fails. |
+| **Phase** | A named group of steps, optionally gated on human approval. |
+| **Step** | One operation inside a phase. `uses:` names its kind — `shell`, `agent`, or anything a plugin registers. |
+| **Agent** | A name for the settings an agent step would otherwise repeat: provider, model, effort, persona. Not a provider — several agents can share one. |
+| **Artifact** | A Markdown document an agent step promises to write. Named, never pathed: Factory decides where it goes, tells the agent, keeps every version and shows the latest. |
+| **Environment** | Whatever a task needs beyond a checkout: a container, a database, seeded data. Factory never builds one; a project's own `environment-*` workflows do, and the `hasEnvironment` flag records that they did. |
+| **Scope** | Where definitions live: `project` → `user` → `builtin`, resolved in that order. |
+| **Capability** | A named contract core defines and something else provides. |
+| **Plugin** | A package providing one or more capabilities. Pro is a plugin bundle; so is a provider. |
+| **Provider** | An agent CLI behind a uniform interface: capabilities, model roles, command rendering. A provider is a **descriptor**, not a class — adding one is a YAML file. |
+| **Bundle** | One self-contained YAML file holding a workflow plus every definition it needs. Its inner definitions are written by the same writers that produce definition files, so a bundle contains exactly what would sit on disk. |
+| **Run** | One execution attempt of a workflow. |
+
+---
+
+## Binding rules
+
+These are architecture, not style. Several are enforced mechanically; where they are, it says so.
+
+1. **The open core never imports commercial code.** Community must install, build, test and run with
+   `factory-pro/` deleted. *Enforced:* separate pnpm workspaces, an eslint `no-restricted-imports`
+   ban, and the `community-standalone` CI job which deletes the directory before building.
+
+2. **Editions are capabilities, not forks.** Core asks the host whether a capability is present and
+   degrades by **absence**. There is no `edition` concept in core, no licence check, no `if (pro)`.
+   Licensing lives inside the Pro plugin, which decides whether it registers at all.
+
+3. **Pro is indistinguishable from a third-party plugin.** Same host, same manifest, same public SDK,
+   and it passes the same conformance suite. If Pro ever needs something a third party cannot do,
+   the SDK is incomplete — widen `@factory/plugin-sdk` rather than reaching into core.
+
+   This has already happened twice, which is the rule working rather than a sign it is wrong: Pro
+   needed the doctor-rule contract (it lives in `@factory/config`), and Pro's own tests needed
+   `CapabilityHost` and `EventBus` to exercise a plugin at all. Both were added to the SDK, so a
+   third party gets them too. Pro's typecheck resolves `@factory/*` through the linked package's
+   `exports`, which point at its built `dist` — reaching past a public entry point does not resolve.
+
+4. **Every built-in ships through the seams.** Parsing *and* planning both go through the step-kind
+   registry — a kind that validates but cannot run is half a seam, and the half that fails later.
+   The builder too: step editors are generated from each kind's own schema, published as JSON
+   Schema, so a plugin's kind gets real labelled controls with no change to the UI. `shell` and `agent` are registered step kinds; the
+   three providers are plugins; doctor checks are registered rules. A built-in that cannot be
+   expressed through the extension API means the API is wrong.
+
+   Capability *kinds* are open strings, not an enum core owns. If core had to declare every kind,
+   Pro's `desktop` capability would need a core change — the exact coupling this design prevents.
+   Core types only the kinds it consumes itself.
+
+5. **One path resolver.** Every filesystem path flows from `packages/config/src/scopes.ts`, which
+   takes its inputs explicitly — `resolveScopes({ cwd, env })` has no defaults, so the prototype's
+   "called with no argument and silently ignored the environment" bug is untypeable. *Enforced:* an
+   eslint ban on `process.cwd()`, `os.homedir()` and `os.tmpdir()` everywhere else (specs excepted).
+   No module-level path constants — they freeze at import time.
+
+   Scopes layer project → user → builtin, first match per name. The cost of layering is that "which
+   file am I running?" stops being obvious, so it is answered rather than left to the user: every
+   resolution carries what it shadows, and `explain` lists every path tried, present or not.
+
+6. **A file Factory wrote is a file Factory can load.** Every write serializes, reads the result
+   back through the schema, and refuses if it does not validate. Callers pass domain objects and
+   nothing stops one being wrong — an older client, a script, a skipped validation — so the check
+   lives at the write, where every path gets it.
+
+7. **Serialization is lossless or it is broken.** The serializer is generated from a field table
+   beside the schema, and an exhaustiveness test asserts the table covers every schema field. Adding
+   a field without teaching the writer fails the build.
+
+8. **Definitions are edited, not regenerated.** Writing an existing file patches the parsed YAML
+   document, so comments, key order and formatting survive. Only new files are serialized wholesale.
+
+9. **One editor, one source of truth.** The form is the only way to change a definition; YAML is a
+   view. Two editors over one document means reconciling them on every switch, and that
+   reconciliation is where a hand-written comment gets dropped. The preview is rendered by the
+   daemon — the process that writes the file — rather than a second copy of the serializer in the
+   browser, for the same reason: a guarantee beats a contract test between two implementations.
+
+10. **Hooks influence; events report.** A hook runs during an operation and can add problems or
+   change the value. An event is a fact that already happened and a subscriber cannot alter it. If a
+   proposed hook has nothing to influence, it is an event.
+
+11. **The `.feature` files are the specification.** There are no separate spec documents. Steps
+   translate; they never decide. A step that needs an `if` means the scenario is under-specified.
+
+---
+
+## Layout
+
+```
+factory/
+├── factory-community/     Apache-2.0 · its own pnpm workspace · publishable
+│   ├── packages/
+│   │   ├── core/          capability contracts, host, registries, schemas, resolvePlan
+│   │   ├── events/        the typed event bus
+│   │   ├── config/        scope discovery and layered resolution
+│   │   ├── plugin-sdk/    the only surface plugins — and Pro — import
+│   │   └── plugins/       provider-claude · provider-codex · provider-copilot
+│   └── apps/              daemon (127.0.0.1:7317) · web · cli
+│
+└── factory-pro/           proprietary · separate workspace · depends one-way on the above
+    └── packages/capability-desktop/
+```
+
+## Specification index
+
+Gherkin lives beside the contract it specifies. This index is the one place to read the whole spec.
+
+| Feature | Contract |
+|---|---|
+| `packages/events/features/event-bus.feature` | Delivery, isolation of a throwing subscriber, unsubscribe semantics |
+| `packages/core/features/capability-host.feature` | Loading, discovery, degrade-by-absence, id conflicts, all-or-nothing registration |
+| `packages/core/features/hooks.feature` | Collect vs transform pipelines, and how each handles a broken plugin |
+| `packages/core/features/plugin-conformance.feature` | The one suite every plugin passes, Pro included |
+| `packages/core/features/definition-schema.feature` | Workflow and phase validation; located, actionable errors |
+| `packages/core/features/step-kinds.feature` | `uses:` resolves through the registry, so a plugin adds a kind with no core change |
+| `packages/core/features/serializer-exhaustiveness.feature` | The writer covers every field the schema accepts |
+| `packages/core/features/round-trip.feature` | Comments, key order and unedited fields survive a save |
+| `packages/core/features/round-trip-properties.feature` | 1,000 generated definitions plus YAML's trap values |
+| `packages/core/features/located-errors.feature` | Problems carry a file, line and column |
+| `packages/config/features/scope-discovery.feature` | Finding `.factory`; `$HOME` is never a project |
+| `packages/config/features/layered-resolution.feature` | Which definition wins, and what it shadows |
+| `packages/config/features/scaffold.feature` | What turning a project setting on copies into the repository, and what it refuses to overwrite |
+| `packages/config/features/scope-plugins.feature` | A project ships its plugins in its own repo |
+| `packages/plugins/provider-claude/features/providers.feature` | Rendering, model roles, capability awareness, conformance |
+| `packages/config/features/plan.feature` | Definitions become runnable processes; nothing executes |
+| `apps/cli/features/cli.feature` | The command surface, exit codes and output, including `factory task` |
+| `packages/config/features/bundles.feature` | Sharing a workflow as one self-contained file |
+| `apps/daemon/features/api.feature` | The definitions API: etags, scope-aware delete, registries |
+| `apps/daemon/features/tasks-api.feature` | Tasks, runs, logs and the live stream — a queued task actually running, a project's own definitions, renaming, agents over HTTP, and when a plan may be changed |
+| `apps/web/features/definition-lists.feature` | What the pages render, in a real browser |
+| `apps/web/features/builder.feature` | Authoring a workflow or phase without writing YAML |
+| `apps/web/features/authoring.feature` | Delete, conflicts, phase references, and the YAML view |
+| `apps/web/features/sharing.feature` | Export a bundle, preview an import, resolve a clash |
+| `apps/web/features/task-board.feature` | The board: the project rail, the grouped menu, filters, both views, live updates, a task's ordered plan, renaming, and environments |
+| `packages/core/features/run.feature` | Running a plan: order, failure, deadlines, approval gates |
+| `factory-pro/…/desktop-capability.feature` | Pro is a plugin: same host, same suite, no core changes |
+| `factory-pro/packages/desktop/features/shell.feature` | The desktop shell: attach or start, the menu bar, what is worth a notification |
+| `packages/store/features/store.feature` | Migrations, transactions, and the guards around both |
+| `packages/store/features/tasks.feature` | The task lifecycle: one table of moves, what each state offers, and what changing the plan does to its place in it |
+| `packages/store/features/runs.feature` | Runs, their steps, and output kept inside a budget |
+| `packages/engine/features/engine.feature` | A task becomes runs: recording, gates, failure, and what a crash leaves |
+| `packages/engine/features/scheduler.feature` | What runs next: order, capacity, lanes read from the task's own project, and why anything was skipped |
+| `packages/engine/features/doctor.feature` | Doctor rules that only exist where a database does |
+| `packages/store/features/projects.feature` | Projects: where work happens, checked when it is written |
+| `packages/core/features/worktree-steps.feature` | `uses: worktree` — isolation a workflow asks for, idempotently |
+| `packages/core/features/provider-resolution.feature` | Where the agent is on *this* machine, and what to say when it is nowhere |
+| `packages/config/features/provider-config.feature` | `providers.<id>.command` — the way out when discovery cannot help |
+| `packages/config/features/setup.feature` | What is still missing, contributed by whoever knows |
+| `packages/store/features/projects.feature` (extended) | Whether a project gives each task a worktree, and what that costs |
+
+**Verifying everything** (from `factory-community`, then `factory-pro`):
+
+```bash
+pnpm typecheck && pnpm lint && pnpm test     # both workspaces
+pnpm --filter @factory/web test:e2e          # the browser scenarios
+pnpm verify:standalone                       # Community with factory-pro/ moved aside
+```
+
+**Running the browser suite:** it starts a daemon on port **7317** per scenario, so nothing else may
+be listening there — not a `factory-daemon` you left running, and not the desktop app. A stray one
+answers the health check, the scenarios drive it instead of their sandbox, and the failures look
+like product bugs in whatever page they happen to be on.
+
+Always `pnpm test:e2e`, never `playwright test` on its own, and never two runs at once. `bddgen`
+bakes each scenario's step bindings into `.features-gen/`, so a half-written or concurrently
+rewritten copy fails with `bddTestData not found for test` — which reads like a broken page and is
+nothing of the kind.
+
+The same error survives deleting `.features-gen`, because **Playwright caches its compiled specs by
+path** in `$TMPDIR/playwright-transform-cache-$UID`. A cached build of a spec whose scenarios have
+since moved reports tests at line numbers that no longer exist, and the run looks up their data and
+finds none. When the error persists after a clean regeneration, that cache is the answer:
+
+```bash
+rm -rf "$TMPDIR/playwright-transform-cache-$UID" .features-gen test-results
+```
+
+**Writing features:** the Gherkin runner strips leading whitespace from doc-strings, so nested YAML
+goes in flow style (`variables: {region: eu-west-1}`) and anything whitespace-sensitive goes in
+`features/fixtures/`. **Build every per-scenario fixture inside `Background`, never in
+`BeforeEachScenario`** — the runner executes Background steps first, so anything created in
+`BeforeEachScenario` does not exist yet. This has cost time twice; it fails every scenario at once
+and the failures look like product bugs.
+
+---
+
+## Working on this
+
+```bash
+cd factory-community
+pnpm install
+pnpm test          # every .feature below the browser
+pnpm test:e2e      # the browser ones (runs bddgen first — always use this script)
+pnpm typecheck
+pnpm lint
+
+pnpm dev           # the builder, on http://127.0.0.1:5317
+node apps/daemon/dist/bin.js   # the daemon it talks to, on 127.0.0.1:7317
+```
+
+**Design tokens live in one place** — `apps/web/src/tokens.css`, via Tailwind 4's `@theme`. The
+prototype declared its palette twice and the two had already drifted, so a colour depended on which
+file you opened. The one exception is the project palette, in a plain `:root` block in the same
+file: Tailwind 4 only emits theme variables that some generated utility references, and those are
+read by name from JavaScript. In `@theme` they were tree-shaken away and every project square
+rendered colourless.
+
+Toolchain: pnpm 12.3 via corepack, TypeScript 5.9 (nodenext), vitest 5, eslint 10,
+`@amiceli/vitest-cucumber` for Gherkin below the browser.

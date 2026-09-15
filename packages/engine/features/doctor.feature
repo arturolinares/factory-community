@@ -1,0 +1,193 @@
+Feature: Doctor, for an installation that is running
+  The built-in rules check what is installed — do the definitions parse, does
+  every phase exist, is the agent on PATH. They answer from files alone, so
+  they run anywhere, including a CLI invocation with no database open.
+
+  These rules answer the other half: why is this task not running, what is
+  waiting for me, and what did the last crash cost. They exist only where the
+  store does, and they arrive the same way any plugin's rules do — so a process
+  without a database simply has fewer rules, with nothing to configure and
+  nothing to switch off.
+
+  Background:
+    Given an empty store
+    And the workflow "hello" exists
+
+  Scenario: A healthy installation has nothing to say
+    Given a task "Add due dates" on "hello"
+    When doctor runs
+    Then doctor reports nothing
+
+  Scenario: A task waiting on a flag is explained
+    Given the workflow "deploy" requires "hasWorktree"
+    And a queued task "Ship it" on "deploy"
+    When doctor runs
+    Then doctor says "Ship it" is waiting for "hasWorktree"
+
+  Scenario: A task waiting on a flag it already has is not reported
+    Given the workflow "deploy" requires "hasWorktree"
+    And a queued task "Ship it" on "deploy"
+    And "Ship it" has the flag "hasWorktree"
+    When doctor runs
+    Then doctor reports nothing
+
+  Scenario: A task pointed at a workflow that no longer exists
+    Given a task "Add due dates" on "gone"
+    When doctor runs
+    Then doctor says "gone" does not exist
+
+  Scenario: A task waiting for a person is surfaced
+    Given a task "Add due dates" on "hello" that is awaiting approval
+    When doctor runs
+    Then doctor says someone needs to approve "Add due dates"
+
+  Scenario: A blocked task carries its reason into the report
+    Given a task "Add due dates" on "hello" that is blocked because "the tests failed"
+    When doctor runs
+    Then doctor repeats "the tests failed"
+
+  Scenario: What the boot had to close is reported
+    Given the last stop left a run of "hello" marked running
+    When Factory starts and reconciles
+    And doctor runs
+    Then doctor says a run was closed because Factory stopped
+
+  Scenario: A run and its task disagreeing is an error
+    Given a task "Add due dates" on "hello" that is blocked because "the tests failed"
+    And a run of "hello" for it is still marked running
+    When doctor runs
+    Then doctor reports an error about a run whose task is not running
+
+  Scenario: A project whose directory has gone is an error
+    Given the project "factory" exists
+    And its directory is deleted
+    When doctor runs
+    Then doctor reports an error about the project's path
+
+  Scenario: A task claiming a worktree that is not there
+    Given the project "factory" exists
+    And a task "Add due dates" in it with the flag "hasWorktree"
+    When doctor runs
+    Then doctor reports an error about the missing worktree
+    And the error says where the work would run instead
+
+  Scenario: Somewhere to work is a setup step, not a fault
+    Given no projects
+    When setup is checked
+    Then "a-project" is not done
+    And it is marked essential
+    And it offers the projects page
+
+  Scenario: A registered project finishes the step
+    Given the project "factory" exists
+    When setup is checked
+    Then "a-project" is done
+    And the detail names the repository
+
+  Scenario: A worktree that is not there is not a fault where worktrees are off
+    Given the project "in-place" exists and works in its own checkout
+    And a task "Add due dates" in it with the flag "hasWorktree"
+    When doctor runs
+    Then doctor reports nothing about a missing worktree
+
+  Scenario: A task waiting for a person in a shared checkout says what it holds up
+    Given the project "in-place" exists and works in its own checkout
+    And a task "Add due dates" in it is awaiting approval
+    When doctor runs
+    Then doctor says nothing else in "in-place" can start
+
+  Scenario: A blocked task in a shared checkout says what it left behind
+    Given the project "in-place" exists and works in its own checkout
+    And a task "Add due dates" in it is blocked
+    When doctor runs
+    Then doctor says what it left behind is still there
+
+  Scenario: A flag nothing the task is assigned provides is a dead end
+    Given the workflow "deploy" requires "hasWorktree"
+    And a queued task "Ship it" on "deploy"
+    When doctor runs
+    Then doctor reports an error about the flag
+    And the error says nothing it is assigned provides it
+
+  Scenario: A flag provided by a workflow that runs later is a dead end too
+    Given the workflow "deploy" requires "hasWorktree"
+    And the workflow "prepare" provides "hasWorktree"
+    And a queued task "Ship it" on "deploy" and then "prepare"
+    When doctor runs
+    Then doctor reports an error about the flag
+    And the error says "prepare" comes too late
+
+  Scenario: Without a store there are no running rules
+    When doctor runs with no store
+    Then doctor has only the installation rules
+
+  Rule: a built-in that asks to be overridden is reported where it is used
+
+    Some built-ins cannot know your setup — where a worktree goes, what an
+    environment is made of. They declare `override: required`, and Factory reads
+    the declaration rather than recognising the name. The prototype switched on
+    workflow names in the engine, so only four blessed names could mean anything
+    and renaming one broke it silently.
+
+    Reported on use, never on existence: a workflow nobody has assigned is not a
+    problem waiting to happen, and a project that never uses worktrees should
+    hear nothing about worktree-create.
+
+    Scenario: A task about to run the built-in copy is reported
+      Given the project "in-place" exists and works in its own checkout
+      And the workflow "worktree-create" must be overridden and resolves from the builtin scope
+      And a task "Ship it" in that project on "worktree-create"
+      When doctor runs
+      Then doctor reports an error naming the file to create
+
+    Scenario: A project that has made its own copy is not reported
+      Given the project "in-place" exists and works in its own checkout
+      And the workflow "worktree-create" must be overridden and resolves from the project scope
+      And a task "Ship it" in that project on "worktree-create"
+      When doctor runs
+      Then doctor reports nothing
+
+    Scenario: A workflow that asks for nothing is never reported
+      Given the project "in-place" exists and works in its own checkout
+      And a task "Ship it" in that project on "hello"
+      When doctor runs
+      Then doctor reports nothing
+
+    Scenario: A task nobody assigned it to is not reported
+      Given the project "in-place" exists and works in its own checkout
+      And the workflow "worktree-create" must be overridden and resolves from the builtin scope
+      And a task "Ship it" in that project on "hello"
+      When doctor runs
+      Then doctor reports nothing
+
+  Rule: a task that runs a workflow before what it needs is reported
+
+    The builder assembles the list correctly. This is for one assembled another
+    way — by the API, by hand, or before the predecessor existed. Reported
+    rather than repaired, for the same reason a flag dead end is: a task's list
+    is a plan somebody wrote, and quietly rewriting it is worse than saying it
+    is wrong.
+
+    Scenario: A predecessor that comes later in the list is an error
+      Given "verify" needs "validate"
+      And a task assigned "verify" then "validate"
+      When doctor runs
+      Then it says "verify" runs before "validate"
+
+    Scenario: A predecessor missing from the list altogether is an error
+      Given "verify" needs "validate"
+      And a task assigned only "verify"
+      When doctor runs
+      Then it says "validate" is not in the list
+
+    Scenario: A correctly ordered task is not reported
+      Given "verify" needs "validate"
+      And a task assigned "validate" then "verify"
+      When doctor runs
+      Then nothing is out of order
+
+    Scenario: A finished task is left alone
+      Given "verify" needs "validate"
+      And a task assigned only "verify" that is already done
+      When doctor runs
+      Then nothing is out of order

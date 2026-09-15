@@ -1,0 +1,21 @@
+# Give a task somewhere of its own to work.
+#
+# Run this before any workflow that edits files. Two agents in one working copy
+# is the failure this exists to prevent: they overwrite each other, and a single
+# `git checkout` throws away work nobody has committed.
+#
+# It declares what it earns. A workflow with `conditions.requires: [hasWorktree]`
+# waits in the queue until this one has run, and the scheduler says so rather
+# than starting it anyway.
+# Where a worktree goes, and what is set up inside it, differs per repository,
+# so `override: required` asks each project for its own copy rather than
+# silently sharing this one.
+kind: factory.workflow/v1
+name: worktree-create
+description: Creates a git worktree for the task, on its own branch.
+override: required
+conditions:
+  provides:
+    - hasWorktree
+phases:
+  - worktree-add

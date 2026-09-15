@@ -1,0 +1,19 @@
+# Build the environment a task needs before anything runs in it.
+#
+# This copy does nothing on purpose. Factory has no idea what your project runs
+# on — a container, a database, seeded data, a tunnel — and a built-in that
+# guessed would be worse than one that asks. `override: required` is that ask:
+# a project using environments must save its own copy, and doctor names the
+# file until it has.
+#
+# It declares what it earns, so a workflow with
+# `conditions.requires: [hasEnvironment]` waits in the queue until this has run.
+kind: factory.workflow/v1
+name: environment-create
+description: Creates the environment a task works in.
+override: required
+conditions:
+  provides:
+    - hasEnvironment
+phases:
+  - environment-build

@@ -1,0 +1,31 @@
+{
+  "name": "@factory/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "The factory command.",
+  "bin": {
+    "factory": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/main.d.ts",
+      "import": "./dist/main.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@factory/config": "workspace:*",
+    "@factory/core": "workspace:*",
+    "@factory/events": "workspace:*",
+    "@factory/provider-claude": "workspace:*",
+    "@factory/provider-codex": "workspace:*",
+    "@factory/provider-copilot": "workspace:*",
+    "@factory/runtime": "workspace:*"
+  }
+}

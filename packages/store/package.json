@@ -1,0 +1,23 @@
+{
+  "name": "@factory/store",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Where a running Factory keeps tasks, runs and logs.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@factory/core": "workspace:*",
+    "@factory/events": "workspace:*"
+  }
+}

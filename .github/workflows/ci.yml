@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  community-standalone:
+    # The open-core boundary, enforced. Community is checked out WITHOUT
+    # factory-pro/ present and must install, typecheck, lint and test anyway.
+    # If this job ever needs the commercial workspace to pass, the boundary
+    # has been broken — widen @factory/plugin-sdk instead of relaxing this.
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: factory-community }
+    steps:
+      - uses: actions/checkout@v4
+      - run: rm -rf factory-pro
+        working-directory: .
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: corepack enable pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test

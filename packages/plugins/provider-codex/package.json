@@ -1,0 +1,11 @@
+{
+  "name": "@factory/provider-codex",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Factory provider for the codex CLI.",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist", "provider.yaml"],
+  "scripts": { "build": "tsc --build" },
+  "dependencies": { "@factory/plugin-sdk": "workspace:*" }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@factory/engine",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Turns a task and its workflows into runs, and picks them back up after a restart.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@factory/config": "workspace:*",
+    "@factory/core": "workspace:*",
+    "@factory/events": "workspace:*",
+    "@factory/store": "workspace:*"
+  }
+}

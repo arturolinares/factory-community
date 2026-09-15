@@ -1,0 +1,65 @@
+# Claude Code.
+#
+# Flags verified against `claude --help` on 2026-09-08.
+kind: factory.provider/v1
+id: claude
+displayName: Claude Code
+summary: Anthropic's coding agent.
+command: claude
+install: npm install -g @anthropic-ai/claude-code
+docs: https://docs.claude.com/en/docs/claude-code
+
+supports:
+  - non_interactive
+  - session_resume
+  - streaming
+  - tool_use
+  - file_access
+  - mcp
+
+# Roles, not ids. `--model` takes an alias for "the latest model of this tier"
+# or a full name, and the alias is the better choice here: it keeps tracking the
+# current model with no edit at all.
+models:
+  strong: opus
+  balanced: sonnet
+  fast: haiku
+
+promptFlag: '-p'
+modelFlag: '--model'
+effortFlag: '--effort'
+# What `--effort` accepts. Declared so the builder can offer them rather than
+# leaving a free text box over a closed set.
+effortValues: [low, medium, high]
+# The prototype claimed Claude could only select a sub-agent by writing "@name"
+# into the prompt. It has a real flag; the prototype's note was out of date.
+subagentFlag: '--agent'
+
+session:
+  # By id, not by "the most recent conversation here".
+  #
+  # `-c` was the original choice and it worked for chaining a task's phases,
+  # but it is imprecise and, for a person, useless. Imprecise: with worktrees
+  # off, every task in a project runs in one directory, so "most recent" is
+  # whichever task ran last. Useless by hand: an *interactive* `claude -c` in
+  # that directory reports "No conversation found to continue", and so does the
+  # `--resume` picker — both exclude the sessions `claude -p` creates, which is
+  # every session Factory makes. Only `--resume <id>` opens one.
+  #
+  # So Factory chooses the id. `--session-id` starts the session and `--resume`
+  # continues it; they are not interchangeable — each refuses the other's case
+  # ("already in use" / "no conversation found with session ID"). Verified
+  # against the real CLI on 2026-09-14; see learnings.md.
+  mode: id
+  idFlag: '--session-id'
+  resumeFlag: '--resume'
+
+permissionArgs: ['--permission-mode', 'bypassPermissions']
+extraArgs: []
+
+# Non-interactive Claude waits on stdin without this.
+stdin: /dev/null
+
+env:
+  # Without this a phase that spawns a background sub-agent is killed at 600s.
+  CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0'

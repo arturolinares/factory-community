@@ -1,0 +1,186 @@
+<script setup lang="ts">
+import { onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
+import { api, type DefinitionListing, type WorkflowChoice } from '../api/client.js'
+import { useProjects } from '../stores/projects.js'
+import { useTasks } from '../stores/tasks.js'
+import PageHeader from '../components/PageHeader.vue'
+import WorkflowPicker from '../components/WorkflowPicker.vue'
+
+/**
+ * Creating a task.
+ *
+ * Its own page rather than a panel that unfolds above the board. Choosing an
+ * ordered list of workflows is the substance of a task, not a detail, and a
+ * form that pushes the board down the screen while you do it makes the board
+ * the thing you are looking at and the decision the thing in the way.
+ */
+const router = useRouter()
+const chosen = useProjects()
+const tasks = useTasks()
+const { items: projects } = storeToRefs(chosen)
+const { error } = storeToRefs(tasks)
+
+/**
+ * Written out here because a Vue interpolation cannot contain `}}` — the
+ * template parser closes on the first one it sees, whatever is around it.
+ */
+const DESCRIPTION_TOKEN = '{{ task.description }}'
+
+const name = ref('')
+const description = ref('')
+const ticketId = ref('')
+const branch = ref('')
+// Defaults to whatever the rail is showing: creating a task while looking at a
+// project almost always means creating it there.
+const projectId = ref(chosen.projectId ?? '')
+const workflows = ref<WorkflowChoice[]>([])
+const available = ref<DefinitionListing[]>([])
+const busy = ref(false)
+
+/** What this project can run — its own scope, layered over the shared ones. */
+async function loadWorkflows(): Promise<void> {
+  try {
+    available.value = (
+      await api.list('workflow', projectId.value === '' ? undefined : projectId.value)
+    ).items
+  } catch {
+    // The form still works without the list; you can only not click a name in.
+    available.value = []
+  }
+}
+
+onMounted(() => {
+  void chosen.load()
+  void loadWorkflows()
+})
+// Changing the project changes which workflows exist, so the list is fetched
+// again rather than filtered — and anything already chosen stays, flagged by
+// the picker if the new project cannot resolve it.
+watch(projectId, loadWorkflows)
+
+async function submit(): Promise<void> {
+  if (name.value.trim() === '' || busy.value) return
+  busy.value = true
+  const id = await tasks.create({
+    name: name.value.trim(),
+    ...(description.value.trim() === '' ? {} : { description: description.value.trim() }),
+    ...(ticketId.value.trim() === '' ? {} : { ticketId: ticketId.value.trim() }),
+    ...(branch.value.trim() === '' ? {} : { branch: branch.value.trim() }),
+    ...(projectId.value === '' ? {} : { projectId: projectId.value }),
+    workflows: workflows.value.map((entry) => entry.workflow),
+  })
+  busy.value = false
+  // Straight to the task, which is the next thing you want to look at.
+  if (id !== undefined) await router.push(`/tasks/${id}`)
+}
+</script>
+
+<template>
+  <PageHeader title="New task" subtitle="A name, what it is for, where it happens, and what it runs — in order." />
+
+  <div class="px-8 py-6">
+    <form class="max-w-3xl" data-testid="new-task-form" @submit.prevent="submit">
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-[var(--color-ink-muted)]">Name</span>
+          <input
+            v-model="name"
+            data-testid="task-name"
+            placeholder="What needs doing"
+            class="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-base)] px-2.5 py-1.5 text-sm"
+          />
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-[var(--color-ink-muted)]">Ticket</span>
+          <input
+            v-model="ticketId"
+            data-testid="task-ticket"
+            placeholder="WW2-20742"
+            class="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-base)] px-2.5 py-1.5 text-sm"
+          />
+        </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-xs text-[var(--color-ink-muted)]">Branch</span>
+          <input
+            v-model="branch"
+            data-testid="task-branch"
+            placeholder="feature/due-dates"
+            class="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-base)] px-2.5 py-1.5 text-sm"
+          />
+        </label>
+      </div>
+
+      <!-- Below the grid, because it is prose and a third of a row is not
+           enough of it. It is also a token, so what goes here is what a
+           prompt can quote. -->
+      <label class="mt-3 flex flex-col gap-1">
+        <span class="text-xs text-[var(--color-ink-muted)]">
+          Description
+          <span class="font-mono text-[var(--color-ink-faint)]">— steps can write {{ DESCRIPTION_TOKEN }}</span>
+        </span>
+        <textarea
+          v-model="description"
+          data-testid="task-description"
+          rows="3"
+          placeholder="What the work is for, in your own words."
+          class="resize-y rounded-md border border-[var(--color-line-strong)] bg-[var(--color-base)] px-2.5 py-1.5 text-sm"
+        />
+      </label>
+
+      <label v-if="projects.length > 0" class="mt-3 flex flex-col gap-1">
+        <span class="text-xs text-[var(--color-ink-muted)]">Project</span>
+        <select
+          v-model="projectId"
+          data-testid="task-project"
+          class="w-full rounded-md border border-[var(--color-line-strong)] bg-[var(--color-base)] px-2.5 py-1.5 text-sm sm:w-72"
+        >
+          <option value="">No project — run where the daemon started</option>
+          <option v-for="project in projects" :key="project.id" :value="project.id">
+            {{ project.name }}
+          </option>
+        </select>
+      </label>
+
+      <div class="mt-5">
+        <span class="text-xs text-[var(--color-ink-muted)]">Workflows, in the order they run</span>
+        <div class="mt-1.5">
+          <WorkflowPicker
+            v-model="workflows"
+            :available="available"
+            :editable="true"
+            :project="projectId === '' ? undefined : projectId"
+          />
+        </div>
+      </div>
+
+      <p
+        v-if="error"
+        class="mt-4 text-sm text-[var(--color-danger)]"
+        data-testid="error"
+      >
+        {{ error }}
+      </p>
+
+      <div class="mt-6 flex items-center gap-3">
+        <button
+          type="submit"
+          data-testid="create-task"
+          class="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          :disabled="busy"
+        >
+          Create task
+        </button>
+        <button
+          type="button"
+          data-testid="cancel-task"
+          class="text-sm text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+          @click="router.push('/tasks')"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+</template>

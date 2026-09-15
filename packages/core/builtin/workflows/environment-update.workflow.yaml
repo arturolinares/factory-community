@@ -1,0 +1,15 @@
+# Bring an existing environment back in line with the repository.
+#
+# Run it after a workflow changes something the environment is built from —
+# dependencies, migrations, fixtures. It neither provides nor clears
+# `hasEnvironment`: the environment existed before and exists after, so a gate
+# depending on it should not swing shut halfway through.
+kind: factory.workflow/v1
+name: environment-update
+description: Updates the task's environment in place.
+override: required
+conditions:
+  requires:
+    - hasEnvironment
+phases:
+  - environment-refresh

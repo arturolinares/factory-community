@@ -1,0 +1,276 @@
+<script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue'
+import { RouterLink } from 'vue-router'
+import { storeToRefs } from 'pinia'
+import { useTasks } from '../stores/tasks.js'
+import PageHeader from '../components/PageHeader.vue'
+import TaskStateBadge from '../components/TaskStateBadge.vue'
+import TaskActions from '../components/TaskActions.vue'
+import type { TaskState } from '../api/client.js'
+
+/**
+ * The board.
+ *
+ * Two views of one list: a table for reading many at once, and columns by state
+ * for seeing where the work is piled up. Both render from the same store, so
+ * neither can be showing something the other is not.
+ *
+ * Rows carry the actions the daemon offered rather than a fixed set of buttons.
+ */
+const store = useTasks()
+const { visible, summary, loading, error, filters, view, acting, workflows } = storeToRefs(store)
+
+const COLUMNS: TaskState[] = ['draft', 'queued', 'running', 'awaiting_approval', 'blocked', 'done']
+const HEADINGS: Record<string, string> = {
+  draft: 'Draft',
+  queued: 'Queued',
+  running: 'Running',
+  awaiting_approval: 'Awaiting approval',
+  blocked: 'Blocked',
+  done: 'Done',
+}
+const STATES: (TaskState | 'all')[] = [
+  'all',
+  'draft',
+  'queued',
+  'running',
+  'awaiting_approval',
+  'blocked',
+  'done',
+  'cancelled',
+]
+
+const inColumn = (state: TaskState) => visible.value.filter((task) => task.state === state)
+const percent = (task: { progress?: { completed: number; total: number } }): number =>
+  task.progress === undefined || task.progress.total === 0
+    ? 0
+    : Math.round((task.progress.completed / task.progress.total) * 100)
+
+const ago = (iso: string): string => {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  if (seconds < 60) return 'just now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`
+  return `${Math.floor(seconds / 86_400)}d ago`
+}
+
+onMounted(() => {
+  void store.load()
+  // Live from here on: a run started by the scheduler changes this page with
+  // nobody touching it, which is most of what a board is for.
+  store.connect()
+})
+onUnmounted(() => store.disconnect())
+</script>
+
+<template>
+  <PageHeader title="Tasks" subtitle="Everything queued, running, waiting and finished." />
+
+  <div class="px-8 py-6">
+    <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="summary">
+      <div
+        v-for="card in [
+          { key: 'total', label: 'Total tasks', value: summary.total, tone: 'text-[var(--color-ink)]' },
+          { key: 'running', label: 'Running', value: summary.running, tone: 'text-[#38bdf8]' },
+          { key: 'waiting', label: 'Awaiting approval', value: summary.waiting, tone: 'text-[#fbbf24]' },
+          { key: 'blocked', label: 'Blocked', value: summary.blocked, tone: 'text-[var(--color-danger)]' },
+        ]"
+        :key="card.key"
+        :data-testid="`summary-${card.key}`"
+        class="rounded-lg border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3"
+      >
+        <p class="font-mono text-2xl" :class="card.tone">{{ card.value }}</p>
+        <p class="mt-0.5 text-xs text-[var(--color-ink-muted)]">{{ card.label }}</p>
+      </div>
+    </div>
+
+    <div class="mb-4 flex flex-wrap items-center gap-2">
+      <input
+        v-model="filters.query"
+        data-testid="search"
+        placeholder="Search tasks…"
+        class="w-56 rounded-md border border-[var(--color-line-strong)] bg-[var(--color-base)] px-2.5 py-1.5 text-sm"
+      />
+      <select
+        v-model="filters.state"
+        data-testid="filter-state"
+        class="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-base)] px-2.5 py-1.5 text-sm"
+      >
+        <option v-for="state in STATES" :key="state" :value="state">
+          {{ state === 'all' ? 'All statuses' : HEADINGS[state] ?? state }}
+        </option>
+      </select>
+      <select
+        v-model="filters.workflow"
+        data-testid="filter-workflow"
+        class="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-base)] px-2.5 py-1.5 text-sm"
+      >
+        <option value="all">All workflows</option>
+        <option v-for="workflow in workflows" :key="workflow" :value="workflow">
+          {{ workflow }}
+        </option>
+      </select>
+
+      <div class="ml-auto flex items-center gap-1 rounded-md border border-[var(--color-line-strong)] p-0.5">
+        <button
+          v-for="option in ['list', 'board'] as const"
+          :key="option"
+          type="button"
+          :data-testid="`view-${option}`"
+          class="rounded px-2.5 py-1 text-xs capitalize transition-colors"
+          :class="
+            view === option
+              ? 'bg-[var(--color-accent-soft)] text-[var(--color-ink)]'
+              : 'text-[var(--color-ink-muted)]'
+          "
+          @click="view = option"
+        >
+          {{ option }}
+        </button>
+      </div>
+      <RouterLink
+        to="/tasks/new"
+        data-testid="new-task"
+        class="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-white"
+      >
+        New task
+      </RouterLink>
+    </div>
+
+    <p
+      v-if="error"
+      class="mb-4 rounded-lg border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/5 px-4 py-3 text-sm text-[var(--color-danger)]"
+      data-testid="error"
+    >
+      {{ error }}
+    </p>
+
+    <p v-if="loading && visible.length === 0" class="text-sm text-[var(--color-ink-muted)]" data-testid="loading">
+      Loading…
+    </p>
+
+    <p
+      v-else-if="visible.length === 0"
+      class="rounded-lg border border-dashed border-[var(--color-line)] px-6 py-10 text-center text-sm text-[var(--color-ink-muted)]"
+      data-testid="tasks-empty"
+    >
+      Nothing here yet. A task is a piece of work and the workflows that will do it.
+    </p>
+
+    <!-- List: the default, because most questions are answered by reading down
+         a column rather than by looking at where things sit. -->
+    <table v-else-if="view === 'list'" class="w-full text-sm" data-testid="task-table">
+      <thead>
+        <tr class="border-b border-[var(--color-line)] text-left font-mono text-[10px] tracking-wider text-[var(--color-ink-faint)] uppercase">
+          <th class="py-2 pr-4">Ticket</th>
+          <th class="py-2 pr-4">Task</th>
+          <th class="py-2 pr-4">Project</th>
+          <th class="py-2 pr-4">Workflow</th>
+          <th class="py-2 pr-4">Status</th>
+          <th class="py-2 pr-4">Progress</th>
+          <th class="py-2 pr-4">Updated</th>
+          <th class="py-2" />
+        </tr>
+      </thead>
+      <tbody>
+        <tr
+          v-for="task in visible"
+          :key="task.id"
+          class="border-b border-[var(--color-line)]/60"
+          :data-testid="`task-row-${task.name}`"
+        >
+          <td class="py-3 pr-4 font-mono text-xs text-[var(--color-ink-muted)]">
+            {{ task.ticketId ?? '—' }}
+          </td>
+          <td class="py-3 pr-4">
+            <RouterLink
+              :to="`/tasks/${task.id}`"
+              class="hover:text-[var(--color-accent)]"
+              :data-testid="`open-${task.name}`"
+            >
+              {{ task.name }}
+            </RouterLink>
+            <p v-if="task.blockedReason" class="mt-0.5 text-xs text-[var(--color-danger)]">
+              {{ task.blockedReason }}
+            </p>
+          </td>
+          <td class="py-3 pr-4 font-mono text-xs text-[var(--color-ink-muted)]">
+            {{ store.projectName(task) ?? '—' }}
+          </td>
+          <td class="py-3 pr-4 font-mono text-xs text-[var(--color-ink-muted)]">
+            {{ store.currentWorkflow(task) ?? '—' }}
+          </td>
+          <td class="py-3 pr-4"><TaskStateBadge :state="task.state" /></td>
+          <td class="py-3 pr-4">
+            <div v-if="task.progress" class="flex items-center gap-2">
+              <span class="h-1 w-24 overflow-hidden rounded-full bg-white/10">
+                <span class="block h-full bg-[var(--color-accent)]" :style="{ width: `${percent(task)}%` }" />
+              </span>
+              <span
+                class="font-mono text-[11px] text-[var(--color-ink-muted)]"
+                :data-testid="`progress-${task.name}`"
+              >
+                {{ task.progress.completed }}/{{ task.progress.total }} phases
+              </span>
+            </div>
+            <span v-else class="text-xs text-[var(--color-ink-faint)]">—</span>
+          </td>
+          <td class="py-3 pr-4 text-xs text-[var(--color-ink-muted)]">{{ ago(task.updatedAt) }}</td>
+          <td class="py-3">
+            <TaskActions
+              :actions="task.actions"
+              :busy="acting === task.id"
+              :only="['queue', 'retry', 'approve', 'reject', 'cancel']"
+              @act="(action) => store.act(task.id, action)"
+            />
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Board: the same tasks, arranged by where they are stuck. -->
+    <div v-else class="grid grid-cols-2 gap-3 lg:grid-cols-6" data-testid="task-board">
+      <section
+        v-for="column in COLUMNS"
+        :key="column"
+        class="rounded-lg border border-[var(--color-line)] bg-[var(--color-surface)] p-2"
+        :data-testid="`column-${column}`"
+      >
+        <header class="flex items-center justify-between px-1 pb-2">
+          <span class="font-mono text-[10px] tracking-wider text-[var(--color-ink-faint)] uppercase">
+            {{ HEADINGS[column] }}
+          </span>
+          <span class="font-mono text-[10px] text-[var(--color-ink-faint)]">
+            {{ inColumn(column).length }}
+          </span>
+        </header>
+        <RouterLink
+          v-for="task in inColumn(column)"
+          :key="task.id"
+          :to="`/tasks/${task.id}`"
+          class="mb-1.5 block rounded-md border border-[var(--color-line)] bg-[var(--color-raised)] p-2.5 hover:border-[var(--color-line-strong)]"
+          :data-testid="`card-${task.name}`"
+        >
+          <p class="text-xs">{{ task.name }}</p>
+          <p class="mt-1 font-mono text-[10px] text-[var(--color-ink-faint)]">
+            {{ store.currentWorkflow(task) ?? 'no workflow' }}
+          </p>
+          <!-- The interface reference ends every card with "0/7 phases  0%". The
+               board had no progress at all, which is the view most likely to be
+               open while something is running. -->
+          <div
+            v-if="task.progress"
+            class="mt-2 flex items-center justify-between border-t border-[var(--color-line)] pt-1.5"
+          >
+            <span class="font-mono text-[10px] text-[var(--color-ink-faint)]">
+              {{ task.progress.completed }}/{{ task.progress.total }} phases
+            </span>
+            <span class="font-mono text-[10px] text-[var(--color-ink-muted)]">
+              {{ percent(task) }}%
+            </span>
+          </div>
+        </RouterLink>
+      </section>
+    </div>
+  </div>
+</template>

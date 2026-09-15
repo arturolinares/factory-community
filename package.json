@@ -1,0 +1,29 @@
+{
+  "name": "@factory/community",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "typecheck": "tsc --build --force && tsc -p tsconfig.spec.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --max-warnings 0",
+    "build": "tsc --build",
+    "verify:standalone": "bash scripts/verify-standalone.sh",
+    "test:e2e": "pnpm --filter @factory/web test:e2e",
+    "dev": "pnpm --filter @factory/web dev"
+  },
+  "devDependencies": {
+    "@amiceli/vitest-cucumber": "^8.0.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.5.0",
+    "eslint": "^10.10.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^5.0.0"
+  }
+}

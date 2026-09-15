@@ -1,0 +1,1207 @@
+import { describeFeature, loadFeature } from '@amiceli/vitest-cucumber'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { expect } from 'vitest'
+import { fileURLToPath } from 'node:url'
+import type { FailureContext } from '@factory/engine'
+import type {
+  Approval,
+  PlanResult,
+  ResolvedPhase,
+  ResolvedPlan,
+  Run,
+  Task,
+} from '@factory/core'
+import { MIGRATIONS, RunRepository, TaskRepository, openStore, type Store } from '@factory/store'
+import { Engine, reconcile, type ReconcileReport } from '@factory/engine'
+
+const feature = await loadFeature(fileURLToPath(new URL('./engine.feature', import.meta.url)))
+
+describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => {
+  let store: Store
+  let tasks: TaskRepository
+  let runs: RunRepository
+  let engine: Engine
+  let task: Task
+  let plans: Map<string, PlanResult>
+  let work = ''
+  let report: ReconcileReport
+  let failure: unknown
+  let tick = 0
+  let ids = 0
+  let sessions = 0
+  /** What each call to `plan` was told about the session, in order. */
+  let sessionsSeen: ({ id: string; started: boolean } | undefined)[] = []
+
+  const now = () => new Date(Date.UTC(2026, 0, 1, 0, 0, tick++)).toISOString()
+
+  AfterEachScenario(() => {
+    store?.close()
+    rmSync(work, { recursive: true, force: true })
+  })
+
+  // Everything per-scenario is built here, not in BeforeEachScenario: the
+  // runner executes Background steps first.
+  Background(({ Given, And }) => {
+    Given('an empty store', () => {
+      tick = 0
+      ids = 0
+      sessions = 0
+      sessionsSeen = []
+      clock = new Date(Date.UTC(2026, 0, 1, 0, 0, 0))
+      plans = new Map()
+      seenFailure = undefined
+      work = mkdtempSync(join(tmpdir(), 'factory-engine-'))
+      failure = undefined
+      store = openStore({ file: ':memory:', migrations: MIGRATIONS })
+      // Monotonic: entry ids are minted from here too, so a fixed value would
+      // give every workflow in a task the same entry id.
+      tasks = new TaskRepository({ db: store.db, now, newId: () => `task-${++ids}` })
+      runs = new RunRepository({ db: store.db, now, newId: () => `run-${++ids}` })
+      engine = buildEngine()
+    })
+    And('a task "Add due dates"', () => {
+      task = tasks.create({ name: 'Add due dates' })
+    })
+  })
+
+  const buildEngine = (timeoutSeconds?: number): Engine =>
+    new Engine({
+      tasks,
+      runs,
+      ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+      // Pinned so "30 seconds from now" is a value the scenario can name.
+      now: () => clock,
+      // Minted here so a scenario can name the id. The engine defaults to a
+      // real UUID, which nothing could assert on.
+      newSessionId: () => `session-${++sessions}`,
+      plan: ({ workflow, failure, session }) => {
+        if (failure !== undefined) seenFailure = failure
+        sessionsSeen.push(session)
+        return (
+          plans.get(workflow) ?? {
+            problems: [
+              {
+                severity: 'error',
+                message: `No workflow named "${workflow}" in any scope.`,
+                rule: 'plan.missingWorkflow',
+              },
+            ],
+          }
+        )
+      },
+    })
+
+  // Real plans running real processes. The runner is already specified in
+  // packages/core; what is being tested here is what the engine writes down
+  // while it runs, so faking the execution would test the wrong half.
+  const shellPhase = (name: string, command: string, approval: Approval = 'none'): ResolvedPhase => ({
+    name,
+    approval,
+    cwd: process.cwd(),
+    steps: [
+      {
+        index: 0,
+        uses: 'shell',
+        planned: { describe: command, command: 'bash', args: ['-c', command] },
+        raw: { uses: 'shell', run: command },
+      },
+    ],
+  })
+  /**
+   * Read through a variable so a scenario can move time.
+   *
+   * Two runs of one artifact need two different readings, or both dated copies
+   * land on the same filename and the second silently replaces the first.
+   */
+  let clock = new Date(Date.UTC(2026, 0, 1, 0, 0, 0))
+
+  const planOf = (workflow: string, phases: ResolvedPhase[]): ResolvedPlan => ({
+    workflow,
+    mode: 'once',
+    scheduling: 'sequential',
+    requires: [],
+    provides: [],
+    clears: [],
+    phases,
+  })
+  const givePlan = (workflow: string, phases: ResolvedPhase[]): void => {
+    plans.set(workflow, { plan: planOf(workflow, phases), problems: [] })
+  }
+
+  const assign = (...workflows: string[]): void => {
+    task = tasks.assign(task.id, workflows)
+  }
+  const queue = (): void => {
+    task = tasks.act(task.id, 'queue')
+  }
+  const runEngine = async (): Promise<void> => {
+    try {
+      task = (await engine.run(task.id)).task
+    } catch (error) {
+      failure = error
+    }
+  }
+  const allRuns = (): Run[] => runs.forTask(task.id)
+  const newest = (): Run => allRuns()[0] as Run
+  const stepsOf = (run: Run) => runs.steps(run.id)
+
+  Scenario('A queued task becomes a run', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" prints "building" and succeeds', () =>
+      givePlan('development', [shellPhase('build', 'echo building')]),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task is "done"', () => expect(task.state).toBe('done'))
+    And('there is 1 run', () => expect(allRuns()).toHaveLength(1))
+    And('the run is "completed"', () => expect(newest().state).toBe('completed'))
+    And('the run is for "development"', () => expect(newest().workflow).toBe('development'))
+  })
+
+  Scenario('Every step is recorded with what it printed', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" prints "building" and succeeds', () =>
+      givePlan('development', [shellPhase('build', 'echo building')]),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the run has 1 step', () => expect(stepsOf(newest())).toHaveLength(1))
+    And('the step is "completed"', () => expect(stepsOf(newest())[0]?.state).toBe('completed'))
+    And('the step\'s log contains "building"', () => {
+      const step = stepsOf(newest())[0]
+      const log = runs.logs(newest().id, { stepId: step?.id as number })
+      expect(log.lines.map((line) => line.text).join('')).toContain('building')
+    })
+  })
+
+  Scenario('A failing step blocks the task', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" fails with exit code 3', () =>
+      givePlan('development', [shellPhase('build', 'exit 3')]),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+    And('the task says why it is blocked', () =>
+      expect(task.blockedReason ?? '').not.toBe(''),
+    )
+    And('the run is "failed"', () => expect(newest().state).toBe('failed'))
+    And('the step exited with 3', () => expect(stepsOf(newest())[0]?.exitCode).toBe(3))
+  })
+
+  Scenario('What never ran is recorded as skipped', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" fails in its first phase and has a second phase', () =>
+      givePlan('development', [shellPhase('build', 'exit 1'), shellPhase('ship', 'echo shipping')]),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the run has 2 steps', () => expect(stepsOf(newest())).toHaveLength(2))
+    And('the step of the second phase is "skipped"', () =>
+      expect(stepsOf(newest()).find((step) => step.phase === 'ship')?.state).toBe('skipped'),
+    )
+  })
+
+  Scenario("A task's workflows run in order", ({ Given, And, When, Then }) => {
+    Given('the task has the workflows "development, review"', () => assign('development', 'review'))
+    And('every workflow succeeds', () => {
+      givePlan('development', [shellPhase('build', 'echo building')])
+      givePlan('review', [shellPhase('review', 'echo reviewing')])
+    })
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('there are 2 runs', () => expect(allRuns()).toHaveLength(2))
+    And('the runs are for "development, review" in that order', () =>
+      expect(
+        allRuns()
+          .map((run) => run.workflow)
+          .reverse(),
+      ).toEqual(['development', 'review']),
+    )
+    And('the task is "done"', () => expect(task.state).toBe('done'))
+  })
+
+  Scenario('A workflow after a failure does not start', ({ Given, And, When, Then }) => {
+    Given('the task has the workflows "development, review"', () => assign('development', 'review'))
+    And('"development" fails with exit code 1', () => {
+      givePlan('development', [shellPhase('build', 'exit 1')])
+      givePlan('review', [shellPhase('review', 'echo reviewing')])
+    })
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('there is 1 run', () => expect(allRuns()).toHaveLength(1))
+    And('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+  })
+
+  const gatedPlan = (): void =>
+    givePlan('development', [
+      shellPhase('build', 'echo building', 'after'),
+      shellPhase('ship', 'echo shipping'),
+    ])
+
+  Scenario('An approval gate parks the task rather than asking', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" needs approval after its first phase and has a second phase', gatedPlan)
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task is "awaiting_approval"', () => expect(task.state).toBe('awaiting_approval'))
+    And('the run is "paused"', () => expect(newest().state).toBe('paused'))
+    And('the run continues from phase 1', () => expect(newest().resumePhase).toBe(1))
+    And('the second phase has not run', () =>
+      expect(stepsOf(newest()).map((step) => step.phase)).toEqual(['build']),
+    )
+  })
+
+  Scenario('Approving continues after the gate without repeating it', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" needs approval after its first phase and has a second phase', gatedPlan)
+    And('the task is queued', queue)
+    And('the engine has run the task', runEngine)
+    When('the task is approved', () => {
+      task = tasks.act(task.id, 'approve')
+    })
+    And('the engine runs the task again', runEngine)
+    Then('the task is "done"', () => expect(task.state).toBe('done'))
+    And('there is 1 run', () => expect(allRuns()).toHaveLength(1))
+    And('the run is "completed"', () => expect(newest().state).toBe('completed'))
+    And('the first phase ran once', () =>
+      expect(stepsOf(newest()).filter((step) => step.phase === 'build')).toHaveLength(1),
+    )
+  })
+
+  Scenario('A workflow that cannot be planned blocks the task and says so', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "nonsense"', () => assign('nonsense'))
+    And('"nonsense" cannot be planned', () => {
+      // Left out of the plan map on purpose: the engine's injected planner
+      // answers exactly as the real one does for a name that resolves nowhere.
+      plans.delete('nonsense')
+    })
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+    And('the run is "refused"', () => expect(newest().state).toBe('refused'))
+    And('the task says why it is blocked', () =>
+      expect(task.blockedReason ?? '').toContain('nonsense'),
+    )
+  })
+
+  Scenario('A step that runs too long is stopped and the task is blocked', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" runs for longer than the deadline', () => {
+      givePlan('development', [shellPhase('build', 'sleep 30')])
+      engine = buildEngine(1)
+    })
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+    And('the run is "timed-out"', () => expect(newest().state).toBe('timed-out'))
+    And('the step is "timed-out"', () => expect(stepsOf(newest())[0]?.state).toBe('timed-out'))
+  })
+
+  Scenario('A task the engine does not own is refused', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('every workflow succeeds', () =>
+      givePlan('development', [shellPhase('build', 'echo building')]),
+    )
+    When('the engine runs the task', runEngine)
+    Then('it is refused', () => expect(failure).toBeDefined())
+    And('the error says what state the task is in', () =>
+      expect((failure as Error).message).toContain('draft'),
+    )
+  })
+
+  Scenario('A task with nothing to run is blocked, not completed', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('every workflow succeeds', () =>
+      givePlan('development', [shellPhase('build', 'echo building')]),
+    )
+    And('the task is queued', queue)
+    And('the workflows are taken away', () => {
+      task = tasks.assign(task.id, [])
+    })
+    When('the engine runs the task', runEngine)
+    Then('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+  })
+
+  Scenario('Running a task again records a second attempt', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" fails with exit code 1', () =>
+      givePlan('development', [shellPhase('build', 'exit 1')]),
+    )
+    And('the task is queued', queue)
+    And('the engine has run the task', runEngine)
+    When('the task is retried and the engine runs it again', async () => {
+      task = tasks.act(task.id, 'retry')
+      await runEngine()
+    })
+    Then('there are 2 runs', () => expect(allRuns()).toHaveLength(2))
+    And('the newest run is attempt 2', () => expect(newest().attempt).toBe(2))
+  })
+
+  const flagPlan = (
+    workflow: string,
+    command: string,
+    conditions: { provides?: string[]; clears?: string[] },
+  ): void => {
+    plans.set(workflow, {
+      plan: {
+        ...planOf(workflow, [shellPhase('work', command)]),
+        provides: conditions.provides ?? [],
+        clears: conditions.clears ?? [],
+      },
+      problems: [],
+    })
+  }
+
+  Scenario('A completed workflow sets the flags it declares', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "worktree-create"', () => assign('worktree-create'))
+    And('"worktree-create" succeeds and provides "hasWorktree"', () =>
+      flagPlan('worktree-create', 'echo made', { provides: ['hasWorktree'] }),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task has the flag "hasWorktree"', () => expect(task.flags).toEqual(['hasWorktree']))
+  })
+
+  Scenario('A workflow that fails earns nothing', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "worktree-create"', () => assign('worktree-create'))
+    And('"worktree-create" fails and would have provided "hasWorktree"', () =>
+      flagPlan('worktree-create', 'exit 1', { provides: ['hasWorktree'] }),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task has no flags', () => expect(task.flags).toEqual([]))
+  })
+
+  Scenario('A workflow can clear a flag it invalidates', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "worktree-delete"', () => assign('worktree-delete'))
+    And('the task already has the flag "hasWorktree"', () => {
+      task = tasks.changeFlags(task.id, { set: ['hasWorktree'] })
+    })
+    And('"worktree-delete" succeeds and clears "hasWorktree"', () =>
+      flagPlan('worktree-delete', 'echo removed', { clears: ['hasWorktree'] }),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task has no flags', () => expect(task.flags).toEqual([]))
+  })
+
+  let seenFailure: FailureContext | undefined
+
+  const recoveryPlan = (workflow: string, command: string, onFail?: string): void => {
+    plans.set(workflow, {
+      plan: {
+        ...planOf(workflow, [shellPhase('work', command)]),
+        ...(onFail === undefined ? {} : { onFail }),
+      },
+      problems: [],
+    })
+  }
+
+  Scenario('A failure can call for help before the task is blocked', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" fails and calls "development-failure" on failure', () =>
+      recoveryPlan('development', 'exit 1', 'development-failure'),
+    )
+    And('"development-failure" writes a diagnosis', () =>
+      recoveryPlan('development-failure', 'echo diagnosing'),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('there are 2 runs', () => expect(allRuns()).toHaveLength(2))
+    And('the recovery run is for "development-failure"', () =>
+      expect(newest().workflow).toBe('development-failure'),
+    )
+    And('the recovery run is "completed"', () => expect(newest().state).toBe('completed'))
+    And('the recovery was told which workflow failed', () => {
+      expect(seenFailure?.workflow).toBe('development')
+      expect(seenFailure?.phase).toBe('work')
+      expect(seenFailure?.reason ?? '').not.toBe('')
+    })
+    And('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+  })
+
+  Scenario('A recovery that fails does not call for help itself', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" fails and calls "development-failure" on failure', () =>
+      recoveryPlan('development', 'exit 1', 'development-failure'),
+    )
+    And('"development-failure" fails and calls "development-failure" on failure', () =>
+      recoveryPlan('development-failure', 'exit 1', 'development-failure'),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    // Two: the failure and one attempt to diagnose it. A third would be the
+    // recovery recovering from itself, which is a loop with no exit.
+    Then('there are 2 runs', () => expect(allRuns()).toHaveLength(2))
+    And('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+  })
+
+  Scenario('A retry resumes at the workflow that failed', ({ Given, And, When, Then }) => {
+    Given('the task has the workflows "development, review"', () => assign('development', 'review'))
+    And('"development" succeeds', () =>
+      givePlan('development', [shellPhase('build', 'echo building')]),
+    )
+    And('"review" fails with exit code 1', () =>
+      givePlan('review', [shellPhase('review', 'exit 1')]),
+    )
+    And('the task is queued', queue)
+    And('the engine has run the task', runEngine)
+    When('the task is retried and the engine runs it again', async () => {
+      task = tasks.act(task.id, 'retry')
+      await runEngine()
+    })
+    Then('"development" ran once', () =>
+      expect(allRuns().filter((run) => run.workflow === 'development')).toHaveLength(1),
+    )
+    And('there are 3 runs', () => expect(allRuns()).toHaveLength(3))
+  })
+
+  const loopPlan = (): void => {
+    plans.set('watch', {
+      plan: { ...planOf('watch', [shellPhase('watch', 'echo watching')]), mode: 'loop', interval: 30 },
+      problems: [],
+    })
+  }
+
+  Scenario('A loop workflow goes back in the queue instead of finishing', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "watch"', () => assign('watch'))
+    And('"watch" loops every 30 seconds', loopPlan)
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task is "queued"', () => expect(task.state).toBe('queued'))
+    And('the task waits 30 seconds before running again', () =>
+      expect(task.runnableAt).toBe(new Date(Date.UTC(2026, 0, 1, 0, 0, 30)).toISOString()),
+    )
+    And('the run is "completed"', () => expect(newest().state).toBe('completed'))
+    And('the task is still on "watch"', () =>
+      expect(task.workflows.find((entry) => entry.workflow === 'watch')?.enabled).toBe(true),
+    )
+  })
+
+  Scenario("A loop's next iteration is a new run", ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "watch"', () => assign('watch'))
+    And('"watch" loops every 30 seconds', loopPlan)
+    And('the task is queued', queue)
+    And('the engine has run the task', runEngine)
+    When('the engine runs the task again', runEngine)
+    Then('there are 2 runs', () => expect(allRuns()).toHaveLength(2))
+    And('the newest run is attempt 2', () => expect(newest().attempt).toBe(2))
+  })
+
+  /**
+   * A step that declares an artifact, in a scratch directory of its own so the
+   * file it writes is real — the engine reads from disk, and a fake would test
+   * the fake.
+   *
+   * The path is the one a plan carries: worked out where the artifacts root and
+   * the step were both in scope, so the engine never derives it a second time.
+   */
+  const artifactsIn = (root: string) => join(root, 'artifacts')
+  const artifactPathFor = (name: string) => join(artifactsIn(work), name, `${name}.md`)
+
+  const artifactPlan = (
+    command: string,
+    approval: Approval = 'none',
+    name = 'report',
+  ): void => {
+    plans.set('review', {
+      plan: planOf('review', [
+        {
+          name: 'work',
+          approval,
+          cwd: work,
+          steps: [
+            {
+              index: 0,
+              uses: 'shell',
+              planned: { describe: command, command: 'bash', args: ['-c', command] },
+              raw: { uses: 'shell', run: command },
+              artifact: { name, path: artifactPathFor(name) },
+            },
+          ],
+        },
+      ]),
+      problems: [],
+    })
+  }
+
+  Scenario('What a phase produced is kept with the run', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "review"', () => assign('review'))
+    And('"review" writes "looks good" to the artifact it declares', () =>
+      artifactPlan(`echo "looks good" > ${artifactPathFor('report')}`),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the run has evidence from the phase "work"', () =>
+      expect(runs.evidence(newest().id).map((entry) => entry.phase)).toEqual(['work']),
+    )
+    And('the evidence reads "looks good"', () =>
+      expect(runs.evidence(newest().id)[0]?.content).toContain('looks good'),
+    )
+  })
+
+  Scenario('An artifact a phase promised and did not produce is recorded and warned about', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    let outcome: Awaited<ReturnType<Engine['run']>> | undefined
+    Given('the task has the workflow "review"', () => assign('review'))
+    And('"review" declares an artifact and writes nothing', () => artifactPlan('echo nothing'))
+    And('the task is queued', queue)
+    When('the engine runs the task', async () => {
+      outcome = await engine.run(task.id)
+      task = outcome.task
+    })
+    Then('the run has evidence from the phase "work"', () =>
+      expect(runs.evidence(newest().id)).toHaveLength(1),
+    )
+    And('the evidence is marked missing', () =>
+      expect(runs.evidence(newest().id)[0]?.missing).toBe(true),
+    )
+    // Warned, not failed: plenty of artifacts are legitimately optional, but
+    // silence is what the prototype had.
+    And('a problem says the artifact is not there', () =>
+      expect(
+        (outcome?.problems ?? []).some((problem) => problem.rule === 'run.artifactMissing'),
+      ).toBe(true),
+    )
+  })
+
+  Scenario('Evidence waits with a task that stopped for approval', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "review"', () => assign('review'))
+    And('"review" writes "looks good" to the artifact it declares and then needs approval', () =>
+      artifactPlan(`echo "looks good" > ${artifactPathFor('report')}`, 'after'),
+    )
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task is "awaiting_approval"', () => expect(task.state).toBe('awaiting_approval'))
+    // The whole point: the person deciding has what they need in front of them.
+    And('the evidence reads "looks good"', () =>
+      expect(runs.evidence(newest().id)[0]?.content).toContain('looks good'),
+    )
+  })
+
+  Scenario('A flaky step is retried, and the run records how many attempts it took', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "flaky"', () => assign('flaky'))
+    And('"flaky" fails once then succeeds, with 1 retry', () => {
+      // A marker file decides the second attempt's exit code, so nothing here
+      // depends on timing.
+      const marker = join(work, 'tried')
+      const command = `if [ -f ${marker} ]; then exit 0; else touch ${marker}; exit 7; fi`
+      plans.set('flaky', {
+        plan: planOf('flaky', [
+          {
+            name: 'work',
+            approval: 'none',
+            cwd: work,
+            steps: [
+              {
+                index: 0,
+                uses: 'shell',
+                planned: { describe: command, command: 'bash', args: ['-c', command] },
+                raw: { uses: 'shell', run: command, retries: 1 },
+              },
+            ],
+          },
+        ]),
+        problems: [],
+      })
+    })
+    And('the task is queued', queue)
+    When('the engine runs the task', runEngine)
+    Then('the task is "done"', () => expect(task.state).toBe('done'))
+    And('the step took 2 attempts', () =>
+      expect(stepsOf(newest())[0]?.attempts).toBe(2),
+    )
+  })
+
+  Scenario('A run a crash left behind is closed at boot', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" was left running when Factory stopped', () => {
+      givePlan('development', [shellPhase('build', 'echo building')])
+      queue()
+      task = tasks.act(task.id, 'start')
+      runs.start({ workflow: 'development', taskId: task.id })
+    })
+    When('Factory starts and reconciles', () => {
+      report = reconcile({ tasks, runs })
+      task = tasks.get(task.id) as Task
+    })
+    Then('the run is "failed"', () => expect(newest().state).toBe('failed'))
+    And('the run says Factory stopped', () =>
+      expect(newest().detail ?? '').toContain('Factory stopped'),
+    )
+    And('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+  })
+
+  Scenario('Reconciling leaves an approved task waiting rather than blocking it', ({
+    Given,
+    And,
+    When,
+    Then,
+  }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" needs approval after its first phase and has a second phase', gatedPlan)
+    And('the task is queued', queue)
+    And('the engine has run the task', runEngine)
+    And('the task is approved', () => {
+      task = tasks.act(task.id, 'approve')
+    })
+    When('Factory starts and reconciles', () => {
+      report = reconcile({ tasks, runs })
+      task = tasks.get(task.id) as Task
+    })
+    // Blocking it would throw away an approval someone already gave, and the
+    // paused run still holds everything that happened before the gate.
+    Then('the task is "running"', () => expect(task.state).toBe('running'))
+    And('nothing was closed', () => expect(report.closedRuns).toHaveLength(0))
+  })
+
+  Scenario('Reconciling leaves a paused run alone', ({ Given, And, When, Then }) => {
+    Given('the task has the workflow "development"', () => assign('development'))
+    And('"development" needs approval after its first phase and has a second phase', gatedPlan)
+    And('the task is queued', queue)
+    And('the engine has run the task', runEngine)
+    When('Factory starts and reconciles', () => {
+      report = reconcile({ tasks, runs })
+      task = tasks.get(task.id) as Task
+    })
+    Then('the run is "paused"', () => expect(newest().state).toBe('paused'))
+    And('the task is "awaiting_approval"', () => expect(task.state).toBe('awaiting_approval'))
+    And('nothing was closed', () => expect(report.closedRuns).toHaveLength(0))
+  })
+
+  Rule('an artifact keeps every version and the latest', ({ RuleScenario }) => {
+    const versionsOf = (name: string) => {
+      try {
+        return readdirSync(join(artifactsIn(work), name, 'versions'))
+      } catch {
+        return []
+      }
+    }
+    const latestOf = (name: string) => readFileSync(artifactPathFor(name), 'utf8')
+
+    RuleScenario('A produced artifact is kept, and a copy of it dated', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "review"', () => assign('review'))
+      And('"review" writes "looks good" to the artifact it declares', () =>
+        artifactPlan(`echo "looks good" > ${artifactPathFor('report')}`),
+      )
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the run has evidence from the phase "work"', () =>
+        expect(runs.evidence(newest().id)).toHaveLength(1),
+      )
+      And('a dated copy of the artifact was kept', () =>
+        expect(versionsOf('report')).toHaveLength(1),
+      )
+    })
+
+    RuleScenario('Running it again adds a version and updates the latest', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "review"', () => assign('review'))
+      And('"review" writes "looks good" to the artifact it declares', () =>
+        artifactPlan(`echo "first" > ${artifactPathFor('report')}`),
+      )
+      And('the task is queued', queue)
+      And('the engine has already run the task once', async () => {
+        await runEngine()
+        // A different clock reading, or both copies would land on one filename.
+        clock = new Date(clock.getTime() + 1000)
+        artifactPlan(`echo "second" > ${artifactPathFor('report')}`)
+        // It unticked itself when it finished, so running it again is a
+        // deliberate gesture now rather than a side effect of re-queueing.
+        task = tasks.assign(
+          task.id,
+          task.workflows.map((entry) => ({ ...entry, enabled: true })),
+        )
+        task = tasks.act(task.id, 'queue')
+      })
+      When('the engine runs the task again', runEngine)
+      Then('there are 2 dated copies', () => expect(versionsOf('report')).toHaveLength(2))
+      And('the latest reads what the second run wrote', () =>
+        expect(latestOf('report')).toContain('second'),
+      )
+    })
+
+    RuleScenario('Two artifacts in one run do not collide', ({ Given, And, When, Then }) => {
+      // The old evidence key was (run, phase), which two artifacts in one phase
+      // would have silently overwritten — keeping whichever ran last.
+      Given('the task has the workflow "two-artifacts"', () => {
+        plans.set('two-artifacts', {
+          plan: planOf('two-artifacts', [
+            {
+              name: 'work',
+              approval: 'none',
+              cwd: work,
+              steps: ['first', 'second'].map((name, index) => {
+                const command = `echo "${name}" > ${artifactPathFor(name)}`
+                return {
+                  index,
+                  uses: 'shell',
+                  planned: { describe: command, command: 'bash', args: ['-c', command] },
+                  raw: { uses: 'shell', run: command },
+                  artifact: { name, path: artifactPathFor(name) },
+                }
+              }),
+            },
+          ]),
+          problems: [],
+        })
+        assign('two-artifacts')
+      })
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the run has 2 pieces of evidence', () =>
+        expect(runs.evidence(newest().id)).toHaveLength(2),
+      )
+      And('they are named "first, second"', () =>
+        expect(
+          runs
+            .evidence(newest().id)
+            .map((entry) => entry.name)
+            .sort()
+            .join(', '),
+        ).toBe('first, second'),
+      )
+    })
+  })
+
+  Rule('a gate that asks first parks with its phase still to run', ({ RuleScenario }) => {
+    const askFirstPlan = (): void =>
+      givePlan('development', [
+        shellPhase('build', 'echo building', 'before'),
+        shellPhase('ship', 'echo shipping'),
+      ])
+
+    RuleScenario('Nothing of the gated phase has run when the task parks', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "development"', () => assign('development'))
+      And('"development" asks before its first phase and has a second phase', askFirstPlan)
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the task is "awaiting_approval"', () => expect(task.state).toBe('awaiting_approval'))
+      And('the run is "paused"', () => expect(newest().state).toBe('paused'))
+      // The complaint that started this: the phase used to have run already.
+      And('no step has run at all', () => expect(stepsOf(newest())).toHaveLength(0))
+      // Phase 0, not 1 — approving has to come back to the phase it authorised.
+      And('the run continues from phase 0', () => expect(newest().resumePhase).toBe(0))
+    })
+
+    RuleScenario('Approving runs the phase that was asked about, exactly once', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "development"', () => assign('development'))
+      And('"development" asks before its first phase and has a second phase', askFirstPlan)
+      And('the task is queued', queue)
+      And('the engine has run the task', runEngine)
+      When('the task is approved', () => {
+        task = tasks.act(task.id, 'approve')
+      })
+      And('the engine runs the task again', runEngine)
+      Then('the task is "done"', () => expect(task.state).toBe('done'))
+      And('there is 1 run', () => expect(allRuns()).toHaveLength(1))
+      // Once. Not never (resumed past it) and not twice (asked, ran, asked
+      // again, ran again) — both of which this resume point could have caused.
+      And('the first phase ran once', () =>
+        expect(stepsOf(newest()).filter((step) => step.phase === 'build')).toHaveLength(1),
+      )
+      And('the second phase ran once', () =>
+        expect(stepsOf(newest()).filter((step) => step.phase === 'ship')).toHaveLength(1),
+      )
+    })
+  })
+
+  Rule('a loop with a repeat count stops when it has done them', ({ RuleScenario }) => {
+    const repeatingPlan = (times: number) => (): void => {
+      plans.set('watch', {
+        plan: {
+          ...planOf('watch', [shellPhase('watch', 'echo watching')]),
+          mode: 'loop',
+          interval: 30,
+          repeat: times,
+        },
+        problems: [],
+      })
+    }
+
+    RuleScenario('A loop set to repeat once runs once and is done', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "watch"', () => assign('watch'))
+      And('"watch" loops every 30 seconds, repeating 1 time', repeatingPlan(1))
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      // `repeat: 1` runs once, not twice: the count includes the pass that has
+      // just finished.
+      Then('the task is "done"', () => expect(task.state).toBe('done'))
+      And('there is 1 run', () => expect(allRuns()).toHaveLength(1))
+    })
+
+    RuleScenario('A loop set to repeat twice goes round again first', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "watch"', () => assign('watch'))
+      And('"watch" loops every 30 seconds, repeating 2 times', repeatingPlan(2))
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the task is "queued"', () => expect(task.state).toBe('queued'))
+      And('the task is still on "watch"', () =>
+        expect(task.workflows.find((entry) => entry.workflow === 'watch')?.enabled).toBe(true),
+      )
+    })
+
+    RuleScenario('And stops on the second pass', ({ Given, And, When, Then }) => {
+      Given('the task has the workflow "watch"', () => assign('watch'))
+      And('"watch" loops every 30 seconds, repeating 2 times', repeatingPlan(2))
+      And('the task is queued', queue)
+      And('the engine has run the task', runEngine)
+      When('the engine runs the task again', runEngine)
+      Then('the task is "done"', () => expect(task.state).toBe('done'))
+      And('there are 2 runs', () => expect(allRuns()).toHaveLength(2))
+    })
+
+    RuleScenario('A loop with no repeat keeps going', ({ Given, And, When, Then }) => {
+      Given('the task has the workflow "watch"', () => assign('watch'))
+      And('"watch" loops every 30 seconds', loopPlan)
+      And('the task is queued', queue)
+      And('the engine has run the task', runEngine)
+      When('the engine runs the task again', runEngine)
+      Then('the task is "queued"', () => expect(task.state).toBe('queued'))
+    })
+  })
+
+  Rule('what runs next is whatever is ticked, and only that', ({ RuleScenario }) => {
+    const ticked = (name: string) =>
+      task.workflows.find((entry) => entry.workflow === name)?.enabled
+    const untick = (...names: string[]): void => {
+      task = tasks.assign(
+        task.id,
+        task.workflows.map((entry) => ({
+          ...entry,
+          enabled: names.includes(entry.workflow) ? false : entry.enabled,
+        })),
+      )
+    }
+    const bothPlanned = (): void => {
+      givePlan('development', [shellPhase('build', 'echo building')])
+      givePlan('review', [shellPhase('review', 'echo reviewing')])
+    }
+
+    RuleScenario('An unticked workflow is passed over', ({ Given, And, When, Then }) => {
+      Given('the task has the workflows "development, review"', () => {
+        assign('development', 'review')
+        bothPlanned()
+      })
+      And('"development" is unticked', () => untick('development'))
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('there is 1 run', () => expect(allRuns()).toHaveLength(1))
+      And('the runs are for "review" in that order', () =>
+        expect(allRuns().map((run) => run.workflow)).toEqual(['review']),
+      )
+    })
+
+    RuleScenario('A workflow that completes unticks itself', ({ Given, And, When, Then }) => {
+      Given('the task has the workflows "development, review"', () => {
+        assign('development', 'review')
+        bothPlanned()
+      })
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('"development" is unticked', () => expect(ticked('development')).toBe(false))
+      And('"review" is unticked', () => expect(ticked('review')).toBe(false))
+    })
+
+    const reviewFails = (): void => {
+      givePlan('development', [shellPhase('build', 'echo building')])
+      givePlan('review', [shellPhase('review', 'exit 1')])
+    }
+
+    RuleScenario('A workflow that failed stays ticked', ({ Given, And, When, Then }) => {
+      Given('the task has the workflows "development, review"', () =>
+        assign('development', 'review'),
+      )
+      And('"review" fails', reviewFails)
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('"development" is unticked', () => expect(ticked('development')).toBe(false))
+      // The case the whole feature is for: a retry does exactly this one again,
+      // with no re-ticking and nothing earlier repeated.
+      And('"review" is still ticked', () => expect(ticked('review')).toBe(true))
+    })
+
+    RuleScenario('Fixing it and running again does only what is left', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflows "development, review"', () =>
+        assign('development', 'review'),
+      )
+      And('"review" fails', reviewFails)
+      And('the task is queued', queue)
+      And('the engine has run the task', runEngine)
+      When('"review" is fixed', () => {
+        givePlan('review', [shellPhase('review', 'echo reviewing')])
+      })
+      And('the task is retried', () => {
+        task = tasks.act(task.id, 'retry')
+      })
+      And('the engine runs the task again', runEngine)
+      // Once, not twice: it succeeded the first time and unticked itself.
+      Then('"development" ran once', () =>
+        expect(allRuns().filter((run) => run.workflow === 'development')).toHaveLength(1),
+      )
+      And('the task is "done"', () => expect(task.state).toBe('done'))
+    })
+
+    RuleScenario('A task queued with nothing ticked is blocked, not completed', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflows "development, review"', () => {
+        assign('development', 'review')
+        bothPlanned()
+      })
+      // Reachable: untick the blocked entry of a blocked task, then retry.
+      And('every workflow is unticked', () => untick('development', 'review'))
+      And('the task is queued', () => {
+        // The state machine still allows the transition; it is `actions()` that
+        // withholds the button. So this is reachable — untick the blocked entry
+        // of a blocked task and retry — and the engine has to cope.
+        task = tasks.act(task.id, 'queue')
+      })
+      When('the engine runs the task', runEngine)
+      Then('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+      And('there are 0 runs', () => expect(allRuns()).toHaveLength(0))
+    })
+  })
+
+  Rule("a task's agent session is written down once it really exists", ({ RuleScenario }) => {
+    /**
+     * A phase whose one step claims to start a session.
+     *
+     * `planned.session` is what a real provider render reports; here it is
+     * stated, because what is under test is what the engine does with the
+     * claim rather than how a command comes to carry it.
+     */
+    const sessionPhase = (options: { command: string; creates?: boolean }): ResolvedPhase => ({
+      name: 'work',
+      approval: 'none',
+      cwd: process.cwd(),
+      steps: [
+        {
+          index: 0,
+          uses: 'agent',
+          planned: {
+            describe: 'claude: look at it',
+            command: options.command === 'missing' ? 'factory-no-such-agent-cli' : 'bash',
+            args: options.command === 'missing' ? [] : ['-c', options.command],
+            ...(options.creates === false
+              ? {}
+              : { session: { id: 'session-1', provider: 'claude', creates: true } }),
+          },
+          raw: { uses: 'agent', prompt: 'look at it' },
+        },
+      ],
+    })
+    const giveSessionPlan = (options: { command: string; onFail?: string }) => (): void => {
+      plans.set('development', {
+        plan: {
+          ...planOf('development', [sessionPhase({ command: options.command })]),
+          ...(options.onFail === undefined ? {} : { onFail: options.onFail }),
+        },
+        problems: [],
+      })
+    }
+    const startsWith = (index: number, id: string) => () =>
+      expect(sessionsSeen[index]).toEqual({ id, started: false })
+    const existsAt = (index: number, id: string) => () =>
+      expect(sessionsSeen[index]).toEqual({ id, started: true })
+
+    RuleScenario('The session is written down after the step that starts it', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "development"', () => assign('development'))
+      And(
+        '"development" runs an agent step that starts a session',
+        giveSessionPlan({ command: 'echo looking' }),
+      )
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the task carries the session "session-1"', () =>
+        expect(task.session?.id).toBe('session-1'),
+      )
+      // The provider travels with the id: which CLI owns the session decides
+      // which flag resumes it, and reading that back off the definitions later
+      // would let an edit to a phase disagree with what ran.
+      And('the session belongs to "claude"', () => expect(task.session?.provider).toBe('claude'))
+    })
+
+    RuleScenario('A later run is told the session already exists', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "development" twice', () =>
+        assign('development', 'development'),
+      )
+      And(
+        '"development" runs an agent step that starts a session',
+        giveSessionPlan({ command: 'echo looking' }),
+      )
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the first plan was told to start "session-1"', startsWith(0, 'session-1'))
+      And('the second plan was told "session-1" already exists', existsAt(1, 'session-1'))
+    })
+
+    RuleScenario('A step that could not be started records nothing', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "development"', () => assign('development'))
+      And(
+        '"development" runs an agent step whose command does not exist',
+        giveSessionPlan({ command: 'missing' }),
+      )
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the task carries no session', () => expect(task.session).toBeUndefined())
+      And('the task is "blocked"', () => expect(task.state).toBe('blocked'))
+    })
+
+    RuleScenario('And the run after it starts a fresh one', ({ Given, And, When, Then }) => {
+      Given('the task has the workflow "development"', () => assign('development'))
+      And(
+        '"development" runs an agent step whose command does not exist',
+        giveSessionPlan({ command: 'missing' }),
+      )
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      // A blocked task is retried, and because nothing was recorded the retry
+      // is asked to start a session rather than to resume one that was never
+      // had. A fresh id, not the one that got away: it costs nothing and it
+      // cannot collide with a session the failed spawn somehow did create.
+      And('the task is retried', async () => {
+        task = tasks.act(task.id, 'retry')
+        await runEngine()
+      })
+      Then('the second plan was told to start a session', () =>
+        expect(sessionsSeen.at(-1)).toEqual({ id: 'session-2', started: false }),
+      )
+    })
+
+    RuleScenario('A step that starts no session records nothing', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "development"', () => assign('development'))
+      And('"development" prints "building" and succeeds', () =>
+        givePlan('development', [shellPhase('build', 'echo building')]),
+      )
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the task carries no session', () => expect(task.session).toBeUndefined())
+    })
+
+    RuleScenario('A recovery workflow is given the same session', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task has the workflow "development"', () => assign('development'))
+      And(
+        '"development" runs an agent step that starts a session then fails',
+        giveSessionPlan({ command: 'echo looking; exit 1', onFail: 'development-failure' }),
+      )
+      And('"development-failure" looks into it', () =>
+        recoveryPlan('development-failure', 'echo diagnosing'),
+      )
+      And('the task is queued', queue)
+      When('the engine runs the task', runEngine)
+      Then('the recovery plan was told "session-1" already exists', () =>
+        expect(sessionsSeen.at(-1)).toEqual({ id: 'session-1', started: true }),
+      )
+    })
+  })
+})

@@ -1,0 +1,51 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@factory/core": [
+        "./packages/core/src/index.ts"
+      ],
+      "@factory/events": [
+        "./packages/events/src/index.ts"
+      ],
+      "@factory/config": [
+        "./packages/config/src/index.ts"
+      ],
+      "@factory/plugin-sdk": [
+        "./packages/plugin-sdk/src/index.ts"
+      ],
+      "@factory/runtime": [
+        "./packages/runtime/src/index.ts"
+      ],
+      "@factory/provider-claude": [
+        "./packages/plugins/provider-claude/src/index.ts"
+      ],
+      "@factory/provider-codex": [
+        "./packages/plugins/provider-codex/src/index.ts"
+      ],
+      "@factory/provider-copilot": [
+        "./packages/plugins/provider-copilot/src/index.ts"
+      ],
+      "@factory/store": [
+        "./packages/store/src/index.ts"
+      ],
+      "@factory/engine": [
+        "./packages/engine/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages/**/features/**/*.ts",
+    "apps/*/features/**/*.ts"
+  ],
+  "exclude": [
+    "apps/web/**"
+  ]
+}

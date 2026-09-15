@@ -1,0 +1,16 @@
+# Take the worktree away again, once the work in it is finished and merged.
+#
+# It clears `hasWorktree`, so anything gated on one stops being runnable until
+# a new worktree is created. That is the same declaration in reverse, and it is
+# why neither workflow needs Factory to recognise its name.
+# `override: required` for the same reason its partner declares it: a project
+# that creates its worktrees its own way removes them its own way too.
+kind: factory.workflow/v1
+name: worktree-delete
+description: Removes the task's git worktree.
+override: required
+conditions:
+  clears:
+    - hasWorktree
+phases:
+  - worktree-remove

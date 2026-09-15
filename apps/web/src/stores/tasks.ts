@@ -1,0 +1,213 @@
+import { defineStore } from 'pinia'
+import { computed, reactive, ref } from 'vue'
+import {
+  ApiError,
+  api,
+  type NewTask,
+  type Project,
+  type TaskListItem,
+  type TaskState,
+  type WorkflowChoice,
+} from '../api/client.js'
+import { live, type LiveConnection } from '../api/live.js'
+import { useProjects } from './projects.js'
+
+/**
+ * The board's state.
+ *
+ * One store rather than per-page fetching, because the board, the filters and
+ * the live stream are three views of the same list — and because a task acted
+ * on from the detail page has to be right on the board when you go back.
+ *
+ * Updates are a reload, not a patch. The daemon is on loopback and the list is
+ * small; an incrementally patched client is how a board ends up disagreeing
+ * with the database about what state something is in.
+ */
+export const useTasks = defineStore('tasks', () => {
+  const chosen = useProjects()
+  const items = ref<TaskListItem[]>([])
+  const projects = ref<Project[]>([])
+  const loading = ref(false)
+  const error = ref<string | undefined>(undefined)
+  const acting = ref<string | undefined>(undefined)
+
+  const filters = reactive({
+    query: '',
+    state: 'all' as TaskState | 'all',
+    workflow: 'all' as string,
+    includeArchived: false,
+  })
+  const view = ref<'list' | 'board'>('list')
+
+  let connection: LiveConnection | undefined
+  let pending: ReturnType<typeof setTimeout> | undefined
+
+  async function load(): Promise<void> {
+    loading.value = true
+    error.value = undefined
+    try {
+      const [result, known] = await Promise.all([
+        api.tasks({ includeArchived: filters.includeArchived }),
+        api.projects(),
+      ])
+      items.value = result.items
+      projects.value = known.items
+    } catch (caught) {
+      error.value = caught instanceof ApiError ? caught.message : String(caught)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Follow the daemon.
+   *
+   * Coalesced: a single run emits a step event per step, and reloading the list
+   * for each one would be a request per line of output.
+   */
+  function connect(): void {
+    if (connection !== undefined) return
+    connection = live(() => {
+      if (pending !== undefined) clearTimeout(pending)
+      pending = setTimeout(() => {
+        pending = undefined
+        void load()
+      }, 120)
+    })
+  }
+
+  function disconnect(): void {
+    if (pending !== undefined) clearTimeout(pending)
+    pending = undefined
+    connection?.close()
+    connection = undefined
+  }
+
+  async function act(id: string, action: string): Promise<void> {
+    acting.value = id
+    error.value = undefined
+    try {
+      await api.actOnTask(id, action)
+      await load()
+    } catch (caught) {
+      error.value = caught instanceof ApiError ? caught.message : String(caught)
+    } finally {
+      acting.value = undefined
+    }
+  }
+
+  async function create(input: NewTask): Promise<string | undefined> {
+    error.value = undefined
+    try {
+      const result = await api.createTask(input)
+      await load()
+      return result.task.id
+    } catch (caught) {
+      error.value = caught instanceof ApiError ? caught.message : String(caught)
+      return undefined
+    }
+  }
+
+  /**
+   * Replace a task's workflows.
+   *
+   * Here rather than a bare `api` call at the call site, so the board reloads
+   * and errors surface the same way every other action's do.
+   */
+  async function assign(id: string, workflows: WorkflowChoice[]): Promise<boolean> {
+    error.value = undefined
+    try {
+      await api.assignWorkflows(id, workflows)
+      await load()
+      return true
+    } catch (caught) {
+      error.value = caught instanceof ApiError ? caught.message : String(caught)
+      return false
+    }
+  }
+
+  /**
+   * The workflow a task will run next: the first one still ticked.
+   *
+   * Nothing, once they are all done. Falling back to the first was never
+   * honest — a finished task is not "on" its first workflow.
+   */
+  const currentWorkflow = (task: TaskListItem): string | undefined =>
+    task.workflows.find((entry) => entry.enabled)?.workflow
+
+  /**
+   * The tasks the board is about.
+   *
+   * The project is not one of the filter controls: it is chosen in the rail and
+   * applies to every page, so it narrows the board before they do rather than
+   * sitting alongside them.
+   */
+  const inProject = computed(() =>
+    chosen.projectId === undefined
+      ? items.value
+      : items.value.filter((task) => task.projectId === chosen.projectId),
+  )
+
+  const visible = computed(() =>
+    inProject.value.filter((task) => {
+      if (filters.state !== 'all' && task.state !== filters.state) return false
+      if (
+        filters.workflow !== 'all' &&
+        !task.workflows.some((entry) => entry.workflow === filters.workflow)
+      ) {
+        return false
+      }
+      const query = filters.query.trim().toLowerCase()
+      if (query === '') return true
+      return (
+        task.name.toLowerCase().includes(query) ||
+        (task.ticketId ?? '').toLowerCase().includes(query)
+      )
+    }),
+  )
+
+  // The cards deliberately ignore the search box and the status dropdown — they
+  // are what you check those against — but not the project, which is not a
+  // filter so much as which board you are looking at.
+  const countOf = (state: TaskState) =>
+    inProject.value.filter((task) => task.state === state).length
+
+  const summary = computed(() => ({
+    total: inProject.value.length,
+    running: countOf('running'),
+    waiting: countOf('awaiting_approval'),
+    blocked: countOf('blocked'),
+    done: countOf('done'),
+  }))
+
+  const workflows = computed(() =>
+    [
+      ...new Set(inProject.value.flatMap((task) => task.workflows.map((e) => e.workflow))),
+    ].sort(),
+  )
+
+  const projectName = (task: TaskListItem): string | undefined =>
+    projects.value.find((project) => project.id === task.projectId)?.name
+
+  return {
+    items,
+    projects,
+    projectName,
+    loading,
+    error,
+    acting,
+    filters,
+    view,
+    inProject,
+    visible,
+    summary,
+    workflows,
+    currentWorkflow,
+    load,
+    connect,
+    disconnect,
+    act,
+    assign,
+    create,
+  }
+})

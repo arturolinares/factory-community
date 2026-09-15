@@ -1,0 +1,113 @@
+# A development pass, start to finish — as a bundle, so it can be imported
+# rather than inherited.
+#
+#     factory bundle import node_modules/@factory/core/examples/development.bundle.yaml
+#
+# It ships as an example rather than as a built-in definition on purpose. A
+# built-in resolves for every project that has not overridden it, and a pipeline
+# that runs `npm test` has no business resolving for a Rust repository. Examples
+# are copied, read and edited; built-ins are the few things that are right for
+# everyone (see the `worktree-create` and `hello-world` workflows).
+#
+# What it demonstrates, in order: an analysis the later phases build on, an
+# agent doing the work in a session that remembers it, the project's own tests
+# as evidence, a reviewer with a deliberately fresh session, a human gate, and a
+# recovery workflow that explains a failure instead of hiding it.
+kind: factory.bundle/v1
+metadata:
+  name: development
+  description: Understand, implement, test and review a change, with a human gate at the end.
+entry:
+  workflow: development
+workflows:
+  - kind: factory.workflow/v1
+    name: development
+    description: Understand, implement, test and review a change, with a human gate at the end.
+    # Waits in the queue until something has created a worktree for the task.
+    # The scheduler reports the wait rather than starting the work anyway.
+    conditions:
+      requires:
+        - hasWorktree
+    on_fail: development-failure
+    phases:
+      - analyse
+      - implement
+      - verify
+      - review
+
+  - kind: factory.workflow/v1
+    name: development-failure
+    description: Explain why the last run failed, and leave the note with the task.
+    phases:
+      - diagnose
+
+phases:
+  - kind: factory.phase/v1
+    name: analyse
+    description: Work out what the change involves before touching anything.
+    steps:
+      - uses: agent
+        model: strong
+        session: task
+        # Naming the artifact is all it takes: Factory works out the path, tells
+        # the agent, keeps a dated copy of every run and shows it on the task.
+        artifact: analysis
+        prompt: >-
+          Read the task "{{ task.name }}" ({{ task.ticketId }}) and the code around it.
+          Write what needs to change, what it touches, and anything that looks risky.
+          Do not make any changes yet.
+
+  - kind: factory.phase/v1
+    name: implement
+    description: Make the change, following the analysis.
+    steps:
+      - uses: agent
+        model: strong
+        # The same session as the analysis, so the agent keeps what it has just
+        # worked out instead of reading everything again.
+        session: task
+        prompt: >-
+          Implement the change described in {{ task.artifacts }}/analysis/analysis.md
+          for the task "{{ task.name }}". Keep to that scope. Commit nothing.
+
+  - kind: factory.phase/v1
+    name: verify
+    description: Run the project's own checks. A green run is the evidence.
+    steps:
+      # The project's own command, not Factory's idea of one. If this is wrong
+      # for your project, this is the line to change.
+      #
+      # No artifact: those belong to agent steps, which are the only ones that
+      # can be told where to write. What this prints is kept as the step's own
+      # output, which is where you would look for it anyway.
+      - run: npm test
+
+  - kind: factory.phase/v1
+    name: review
+    description: A second opinion, then a person decides.
+    approval: after
+    steps:
+      - uses: agent
+        model: balanced
+        # A fresh session on purpose: a reviewer that watched the work happen
+        # tends to agree with it.
+        session: phase
+        artifact: review
+        prompt: >-
+          Review the uncommitted changes in this worktree against
+          {{ task.artifacts }}/analysis/analysis.md. Write what is wrong, what is
+          missing and what you would change. Be specific and brief.
+
+  - kind: factory.phase/v1
+    name: diagnose
+    description: Say why it failed, in a paragraph someone can act on.
+    steps:
+      - uses: agent
+        model: balanced
+        session: none
+        artifact: failure
+        prompt: >-
+          The phase "{{ project.failedPhase }}" of "{{ project.failedWorkflow }}"
+          failed: {{ project.failureReason }}. Look at what is in this working
+          directory and write what went wrong and the smallest thing that would
+          fix it. Change nothing.

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "./src", "outDir": "./dist" },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../config" },
+    { "path": "../events" },
+    { "path": "../plugins/provider-claude" },
+    { "path": "../plugins/task-terminal" },
+    { "path": "../plugins/task-session" },
+    { "path": "../plugins/task-diffity" },
+    { "path": "../plugins/provider-codex" },
+    { "path": "../plugins/provider-copilot" }
+  ]
+}

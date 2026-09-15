@@ -1,0 +1,28 @@
+{
+  "name": "@factory/task-terminal",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Opens a terminal where a task's work is.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@factory/plugin-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@factory/provider-claude": "workspace:*",
+    "@factory/provider-codex": "workspace:*",
+    "@factory/task-diffity": "workspace:*",
+    "@factory/task-session": "workspace:*"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "@factory/plugin-sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "The only surface plugins \u2014 and factory-pro \u2014 import.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@factory/core": "workspace:*",
+    "@factory/events": "workspace:*",
+    "yaml": "^2.9.0",
+    "@factory/config": "workspace:*"
+  }
+}

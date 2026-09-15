@@ -1,0 +1,281 @@
+Feature: The factory command
+  The command line is where the definition layer becomes usable. Everything it
+  needs — a scope chain, a capability host, an environment — is passed in, so
+  the commands are functions of their arguments rather than of the machine.
+
+  Two of these exist because of specific incidents in the prototype's backlog.
+  `why` answers "which file am I actually running?", which layered resolution
+  makes non-obvious. `doctor` answers "why doesn't this work?", which used to
+  mean reading YAML by eye after a failure that named no file, no line and no
+  field.
+
+  Background:
+    Given a project scope and a user scope
+
+  Scenario: config path shows where Factory is reading from
+    When I run "config path"
+    Then it succeeds
+    And the output lists the scopes in order "project, user, builtin"
+    And the output says new definitions go to the project scope
+
+  Scenario: init creates a scope that is ready to use
+    Given the project scope does not exist yet
+    When I run "init"
+    Then it succeeds
+    And a scope config is written
+    And a workflows directory is created
+    And a phases directory is created
+
+  Scenario: init is safe to run twice
+    When I run "init"
+    And I run "init"
+    Then it succeeds
+    And the output says it is already initialised
+
+  Scenario: workflow list shows what is available and where it came from
+    Given the project scope defines the workflow "release"
+    When I run "workflow list"
+    Then it succeeds
+    And the output mentions "release"
+    And the output mentions "hello-world"
+
+  Scenario: workflow list marks a definition that shadows another
+    Given the project scope defines the workflow "hello-world"
+    When I run "workflow list"
+    Then it succeeds
+    And the output says something shadows the builtin scope
+
+  Scenario: workflow show prints the file and where it came from
+    Given the project scope defines the workflow "release"
+    When I run "workflow show release"
+    Then it succeeds
+    And the output mentions the project scope
+    And the output contains the file's own text
+
+  Scenario: workflow show explains a name that does not exist
+    When I run "workflow show nowhere"
+    Then it fails
+    And the output suggests running why
+
+  Scenario: why lists every path that was tried
+    Given the project scope defines the workflow "hello-world"
+    When I run "why workflow hello-world"
+    Then it succeeds
+    And the output marks the project copy as used
+    And the output marks the builtin copy as hidden
+    And the output mentions the user scope path that does not exist
+
+  Scenario: doctor is quiet when nothing is wrong
+    When I run "doctor"
+    Then the output reports the number of rules run
+
+  Scenario: doctor reports a definition that does not validate
+    Given the project scope defines a broken workflow "oops"
+    When I run "doctor"
+    Then it fails
+    And the output names the file and line
+    And the output names the field "mode"
+
+  Scenario: doctor reports a workflow naming a phase that does not exist
+    Given the project scope defines the workflow "dangling" naming a missing phase
+    When I run "doctor"
+    Then it fails
+    And the output says the phase does not exist
+
+  Scenario: doctor warns about an agent that is not installed
+    When I run "doctor"
+    Then the output warns that a provider is not installed
+    And the output says how to point Factory at it
+
+  Scenario: a warning alone does not fail the command
+    Given the project scope defines the workflow "hello-world"
+    When I run "doctor"
+    Then it succeeds
+
+  Scenario: capabilities lists what is installed and who provided it
+    When I run "capabilities"
+    Then it succeeds
+    And the output mentions "step-kind"
+    And the output mentions "provider"
+    And the output mentions "doctor-rule"
+
+  Scenario: provider list says which agents are actually present
+    When I run "provider list"
+    Then it succeeds
+    And the output mentions "claude"
+    And the output marks codex as having an unverified descriptor
+
+  Scenario: step-kind list says which kinds can run
+    When I run "step-kind list"
+    Then it succeeds
+    And the output marks "shell" as runnable
+
+  Scenario: json output is machine-readable
+    Given the project scope defines the workflow "release"
+    When I run "workflow list --json"
+    Then it succeeds
+    And the output parses as JSON
+
+  Scenario: an unknown command explains itself
+    When I run "frobnicate"
+    Then it is a usage error
+    And the output shows the usage
+
+  Scenario: no arguments shows the usage
+    When I run ""
+    Then it is a usage error
+    And the output shows the usage
+
+  Scenario: running the built-in workflow works out of the box
+    When I run "run hello-world --yes"
+    Then it succeeds
+    And the output says it completed
+
+  Scenario: a dry run prints the command and runs nothing
+    Given the project defines a workflow that writes a file
+    When I run "run writes --dry-run"
+    Then it succeeds
+    And no file was written
+
+  Scenario: running it for real writes the file
+    Given the project defines a workflow that writes a file
+    When I run "run writes --yes"
+    Then it succeeds
+    And the file was written
+
+  Scenario: task details fill the template tokens
+    Given the project defines a workflow that echoes the ticket
+    When I run "run greeting --ticket WW2-1234 --yes"
+    Then it succeeds
+    And the output mentions "WW2-1234"
+
+  Scenario: an approval gate stops a run with no terminal
+    When I run "run hello-world"
+    Then it fails
+    And the output says there is no terminal to ask
+
+  Scenario: running a workflow that does not exist explains itself
+    When I run "run nowhere"
+    Then it fails
+    And the output says there is no such workflow
+
+  Scenario: colour is suppressed when NO_COLOR is set
+    When I run "config path" with NO_COLOR set
+    Then it succeeds
+    And the output contains no escape codes
+
+  Scenario: tasks are listed from the daemon
+    Given a daemon with a task "Add due dates" that is queued
+    When I run "task list"
+    Then the output contains "Add due dates"
+    And the output contains "queued"
+
+  Scenario: nothing to list says how to make one
+    Given a daemon with no tasks
+    When I run "task list"
+    Then the output contains "No tasks"
+    And the output contains "factory task new"
+
+  Scenario: a task is created with its workflows in order
+    Given a daemon with no tasks
+    When I run "task new Add due dates --workflow worktree-create --workflow development"
+    Then the daemon was asked to create a task with workflows "worktree-create, development"
+    And the output says how to start it
+
+  Scenario: showing a task lists what it can do next
+    Given a daemon with a task "Add due dates" that is queued
+    When I run "task show task-1"
+    Then the output contains "factory task cancel"
+
+  Scenario: an action the task cannot take explains what it can
+    Given a daemon that refuses with the actions "queue, cancel"
+    When I run "task approve task-1"
+    Then the command fails
+    And the output contains "Available: queue, cancel"
+
+  Scenario: no daemon is explained rather than reported as a crash
+    Given no daemon is running
+    When I run "task list"
+    Then the command fails
+    And the output contains "Cannot reach the Factory daemon"
+    And the output contains "factory-daemon"
+
+  Scenario: the short id the listing prints is enough to act on
+    Given a daemon with a task "Add due dates" that is queued
+    When I run "task cancel task-1a2"
+    Then the daemon was asked to act on the full id
+
+  Scenario: an id that matches two tasks is refused rather than guessed
+    Given a daemon with two tasks whose ids start the same way
+    When I run "task cancel task-1"
+    Then the command fails
+    And the output says which ones it matched
+
+  Scenario: setup says what is missing when nothing is installed
+    When I run "setup"
+    Then the output contains "Install a coding agent"
+    And the output says how to install one
+    And the output says Factory cannot run work yet
+
+  Scenario: setup works without a daemon, and says so
+    Given no daemon is running
+    When I run "setup"
+    Then the output says the daemon is not running
+
+  Scenario: setup prefers the daemon, which can see the database
+    Given a daemon reporting one outstanding step
+    When I run "setup"
+    Then the output contains "Add a repository"
+
+
+  Rule: a foreground run is one conversation too
+
+    `factory run` has no task to hang a session on, so the invocation itself is
+    the scope. Without one, a workflow's phases would each be a fresh
+    conversation — which is what `session: task` exists to prevent, and it
+    should not depend on whether the daemon happened to start the run.
+
+    Scenario: The phases of one run share one session
+      Given the project defines a workflow with two agent phases carrying a session
+      When I run "run pipeline --dry-run"
+      Then it succeeds
+      And the first phase starts a session
+      And the second phase resumes the same one
+
+  Rule: the plugin switches are reachable when the board is not
+
+    The board can switch a plugin off, and the one time you most need to is
+    when a plugin is stopping the daemon from starting — which is exactly when
+    the board cannot help. So the same list and the same switch are here,
+    reading and writing the same file.
+
+    Scenario: The list says what is installed and whether it is on
+      When I run "plugins"
+      Then it succeeds
+      And the output mentions "@factory/task-diffity"
+      And the output says the core built-ins are required
+
+    Scenario: Switching one off writes the settings
+      When I run "plugins disable @factory/task-diffity"
+      Then it succeeds
+      And the settings file holds "@factory/task-diffity"
+      And it says a restart will unload it
+
+    Scenario: Switching it back on removes it
+      Given "@factory/task-diffity" is switched off
+      When I run "plugins enable @factory/task-diffity"
+      Then it succeeds
+      And nothing is switched off
+
+    Scenario: A core built-in cannot be switched off
+      When I run "plugins disable @factory/core/builtin-steps"
+      Then it fails
+      And the output says it would leave Factory unable to do anything
+
+    Scenario: Switching off something nothing claims is refused
+      When I run "plugins disable @acme/imaginary"
+      Then it fails
+
+    Scenario: A verb nobody recognises is a usage error
+      When I run "plugins wiggle @factory/task-diffity"
+      Then it is a usage error

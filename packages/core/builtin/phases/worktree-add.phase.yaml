@@ -1,0 +1,11 @@
+kind: factory.phase/v1
+name: worktree-add
+description: Add a worktree at the project's worktree root, on the task's branch.
+steps:
+  # `{{ project.worktrees }}` is the project's worktree root, which is never
+  # inside the repository; `{{ task.directory }}` is derived from the task's
+  # name when nothing else supplied one.
+  - uses: worktree
+    action: create
+    path: "{{ project.worktrees }}/{{ task.directory }}"
+    branch: "{{ task.branch }}"

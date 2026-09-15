@@ -1,0 +1,6 @@
+kind: factory.phase/v1
+name: greet
+description: Ask first, then say hello.
+approval: before
+steps:
+  - run: echo "Hello from Xaedalon Factory."

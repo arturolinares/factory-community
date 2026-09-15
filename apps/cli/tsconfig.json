@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/config"
+    },
+    {
+      "path": "../../packages/events"
+    },
+    {
+      "path": "../../packages/plugins/provider-claude"
+    },
+    {
+      "path": "../../packages/plugins/provider-codex"
+    },
+    {
+      "path": "../../packages/plugins/provider-copilot"
+    },
+    {
+      "path": "../../packages/runtime"
+    }
+  ]
+}

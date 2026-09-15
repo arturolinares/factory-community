@@ -1,0 +1,22 @@
+# Analysis: read the ticket, produce the `analysis` artifact, wait for a human.
+name: analysis
+description: Analyse the task and produce an artifact.
+approval: after
+working_dir: web
+
+variables:
+  depth: deep
+
+steps:
+  # Deterministic setup first.
+  - run: git fetch --all
+
+  # Then the agent. Model is a role, not an id, so this survives a model
+  # rename at the provider.
+  - uses: agent
+    # The artifact belongs to the step that writes it: Factory works out where
+    # it goes and tells the agent, so a name is all this has to say.
+    artifact: analysis
+    prompt: Analyse {{ task.ticketId }}
+    model: strong
+    session: workflow

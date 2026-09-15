@@ -1,0 +1,30 @@
+{
+  "name": "@factory/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "The Factory builder.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --build && vite build",
+    "preview": "vite preview",
+    "test:e2e": "bddgen && playwright test"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.15",
+    "marked": "^18.0.13",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.42",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "playwright-bdd": "^9.2.1",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.2",
+    "vue-tsc": "^3.1.4"
+  }
+}

@@ -1,0 +1,14 @@
+# Take the environment away once the work in it is finished.
+#
+# It clears `hasEnvironment`, so anything gated on one stops being runnable
+# until a new environment is created — the same declaration in reverse that the
+# worktree pair uses, and why neither needs Factory to recognise its name.
+kind: factory.workflow/v1
+name: environment-delete
+description: Removes the task's environment.
+override: required
+conditions:
+  clears:
+    - hasEnvironment
+phases:
+  - environment-teardown

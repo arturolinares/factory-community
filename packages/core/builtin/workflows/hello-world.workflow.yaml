@@ -1,0 +1,7 @@
+# The smallest workflow that does something real. Used by `factory run` to prove
+# an installation works end to end.
+kind: factory.workflow/v1
+name: hello-world
+description: Asks your permission, then prints a greeting.
+phases:
+  - greet

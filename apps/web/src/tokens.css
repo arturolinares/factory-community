@@ -1,0 +1,190 @@
+@import 'tailwindcss';
+
+/**
+ * The design tokens, defined once.
+ *
+ * The prototype declared its palette twice — once in tailwind.config.js and
+ * again as CSS custom properties in a stylesheet — and the two had already
+ * drifted: "queue purple" was #9b6dff in one file and #7c3aed in the other,
+ * so a colour depended on which file the component author happened to open.
+ *
+ * Tailwind 4 reads its theme from CSS, so there is no second place to put
+ * these. `@theme` values are available both as `bg-surface` utilities and as
+ * `var(--color-surface)`.
+ */
+@theme {
+  /* Surfaces, darkest first. Near-black rather than blue-black. */
+  --color-base: #080808;
+  --color-surface: #0e0e12;
+  --color-raised: #16161c;
+  --color-overlay: #1d1d24;
+
+  /* Hairlines. Borders here are separators, not decoration. */
+  --color-line: #252525;
+  --color-line-strong: #34343c;
+
+  /* Text. Three weights is enough; a fourth just makes things muddy. */
+  --color-ink: #f0f0f0;
+  --color-ink-muted: #9a9aa4;
+  --color-ink-faint: #5c5c66;
+
+  /* The one accent. */
+  --color-accent: #6d5cf5;
+  --color-accent-soft: #6d5cf526;
+
+
+  /* Status. Also used for scope badges, so they read consistently. */
+  --color-ok: #18b870;
+  --color-info: #00c8d8;
+  --color-warn: #f0a020;
+  --color-danger: #e5484d;
+
+  --font-sans: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+/**
+ * The bounded exception to "the one accent".
+ *
+ * Everywhere else colour means *status* — this is the only place it means
+ * *identity*. A project's square in the rail has to be findable at a glance
+ * among a dozen others, and shape alone does not do that. Six hues, picked from
+ * the name, so adding a project never needs a decision and never needs a
+ * migration; muted enough that a row of them does not out-shout a red "blocked"
+ * badge beside them. If a seventh meaning for colour is ever wanted, it does
+ * not go here.
+ *
+ * In `:root` rather than `@theme`, which is not a style choice. Tailwind 4 only
+ * emits the theme variables some generated utility actually references, and
+ * these are never a utility: they are read by name in `identity.ts` and set as
+ * an inline style. Declared in `@theme` they were tree-shaken out of the
+ * stylesheet, and every project square rendered with no colour at all.
+ */
+:root {
+  --color-project-1: #5b7cfa;
+  --color-project-2: #12a594;
+  --color-project-3: #c2554d;
+  --color-project-4: #a05ac0;
+  --color-project-5: #b07d24;
+  --color-project-6: #3a8f5a;
+}
+
+html {
+  color-scheme: dark;
+  /* Nothing outside the app scrolls. The shell owns the viewport and its main
+     pane is the scroller, so a second scrollbar here would carry the nav off
+     the top — which is the bug this arrangement exists to fix. */
+  overflow: hidden;
+}
+
+/**
+ * The app's own height, in the presence of page zoom.
+ *
+ * `100vh` is measured in *unzoomed* pixels, so under `zoom: 2` a `100vh` shell
+ * lays out twice as tall as the window and the document grows a scrollbar of
+ * its own. Dividing by the zoom is what makes "full height" mean the window at
+ * every interface size. Only visible above 1×, which is why it was worth
+ * looking at 2× before believing the sticky rails worked.
+ */
+.app-viewport {
+  height: calc(100vh / var(--app-zoom, 1));
+  overflow: hidden;
+  /* A *container*, not a media query, because a media query measures the
+     unzoomed window: at 3× on a 1280 monitor it still reads 1280px and stays
+     in the widest layout while the usable width is 427. A container query
+     measures this element, which is in the zoomed coordinate space and is
+     therefore the width things actually have. */
+  container-type: inline-size;
+}
+
+/**
+ * Not much room: a narrow window, or a high interface scale on a wide one.
+ *
+ * The rails give up their space before the content does — at 3× they would
+ * otherwise take 272 of 427 usable pixels and leave a column nobody can read
+ * in. The mobile reference makes the same trade with a bottom tab bar.
+ */
+@container (max-width: 900px) {
+  .app-rail {
+    display: none;
+  }
+
+  .app-nav {
+    width: 10rem;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--color-base);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/**
+ * A select and a combobox, indistinguishable.
+ *
+ * They were not: a `<select>` draws the browser's own arrow and inherited the
+ * sans stack, while an `<input list>` is monospace and — in Chromium — hides
+ * its arrow until the pointer is over it. Two controls doing the same job, one
+ * of which only admits to being a dropdown if you happen to hover it.
+ *
+ * So neither uses the browser's arrow. `appearance: none` removes the select's,
+ * and both draw the same chevron as a background image, always visible.
+ */
+.field-control {
+  width: 100%;
+  appearance: none;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background-color: var(--color-base);
+  color: var(--color-ink);
+  padding: 0.375rem 2rem 0.375rem 0.75rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.75 6 6.25 11 1.75' fill='none' stroke='%239a9aa4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  background-size: 11px 7px;
+}
+
+.field-control:focus {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.field-control::placeholder {
+  color: var(--color-ink-faint);
+}
+
+/**
+ * The datalist's own arrow: kept, because nothing else can open the list.
+ *
+ * There is no way to open a datalist from script, so the native indicator is
+ * the only thing that opens it by clicking. It is made transparent and widened
+ * to sit exactly over the chevron drawn above — invisible, still clickable, so
+ * the control looks like a select and behaves like one.
+ *
+ * Chromium-only by nature, which is fine: this ships in Electron and is tested
+ * in Chrome.
+ */
+.field-control::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  width: 2rem;
+  margin-right: -0.75rem;
+  cursor: pointer;
+}
+
+/**
+ * Every value that ends up in a YAML file renders in monospace.
+ *
+ * One rule, and it is what makes the app read as a config editor rather than a
+ * CRM form: a workflow name, a path, a command and a prompt are all text a
+ * person will later see in a file, so they should look the same in both places.
+ */
+.value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}

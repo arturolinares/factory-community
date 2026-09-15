@@ -1,0 +1,32 @@
+{
+  "name": "@factory/daemon",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "The local Factory service: definitions over HTTP.",
+  "bin": {
+    "factory-daemon": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "node --watch dist/bin.js"
+  },
+  "dependencies": {
+    "@factory/config": "workspace:*",
+    "@factory/core": "workspace:*",
+    "@factory/engine": "workspace:*",
+    "@factory/runtime": "workspace:*",
+    "@factory/store": "workspace:*",
+    "fastify": "^5.6.0",
+    "zod": "^4.5.4"
+  }
+}

@@ -1,0 +1,485 @@
+Feature: Turning a task into runs
+  The engine is what stands between a task somebody queued and the processes
+  that do the work. It plans each of the task's workflows, runs it, writes down
+  every step and everything printed, and moves the task through the states the
+  board shows — always by asking the task's own rules, never by writing a state
+  directly.
+
+  It also has to be honest about stopping. A workflow can fail, a step can hit
+  its deadline, a phase can ask for approval, and a plan can turn out not to
+  resolve at all. Each of those ends somewhere different, and the difference is
+  the whole reason a person can tell at a glance whether a task needs them.
+
+  Approval is the case worth stating plainly: the engine may be running with
+  nobody watching, so a gate does not ask. It stops the run, remembers the phase
+  to continue from, and leaves the task where a person will find it.
+
+  Background:
+    Given an empty store
+    And a task "Add due dates"
+
+  Scenario: A queued task becomes a run
+    Given the task has the workflow "development"
+    And "development" prints "building" and succeeds
+    And the task is queued
+    When the engine runs the task
+    Then the task is "done"
+    And there is 1 run
+    And the run is "completed"
+    And the run is for "development"
+
+  Scenario: Every step is recorded with what it printed
+    Given the task has the workflow "development"
+    And "development" prints "building" and succeeds
+    And the task is queued
+    When the engine runs the task
+    Then the run has 1 step
+    And the step is "completed"
+    And the step's log contains "building"
+
+  Scenario: A failing step blocks the task
+    Given the task has the workflow "development"
+    And "development" fails with exit code 3
+    And the task is queued
+    When the engine runs the task
+    Then the task is "blocked"
+    And the task says why it is blocked
+    And the run is "failed"
+    And the step exited with 3
+
+  Scenario: What never ran is recorded as skipped
+    Given the task has the workflow "development"
+    And "development" fails in its first phase and has a second phase
+    And the task is queued
+    When the engine runs the task
+    Then the run has 2 steps
+    And the step of the second phase is "skipped"
+
+  Scenario: A task's workflows run in order
+    Given the task has the workflows "development, review"
+    And every workflow succeeds
+    And the task is queued
+    When the engine runs the task
+    Then there are 2 runs
+    And the runs are for "development, review" in that order
+    And the task is "done"
+
+  Scenario: A workflow after a failure does not start
+    Given the task has the workflows "development, review"
+    And "development" fails with exit code 1
+    And the task is queued
+    When the engine runs the task
+    Then there is 1 run
+    And the task is "blocked"
+
+  Scenario: An approval gate parks the task rather than asking
+    Given the task has the workflow "development"
+    And "development" needs approval after its first phase and has a second phase
+    And the task is queued
+    When the engine runs the task
+    Then the task is "awaiting_approval"
+    And the run is "paused"
+    And the run continues from phase 1
+    And the second phase has not run
+
+  Scenario: Approving continues after the gate without repeating it
+    Given the task has the workflow "development"
+    And "development" needs approval after its first phase and has a second phase
+    And the task is queued
+    And the engine has run the task
+    When the task is approved
+    And the engine runs the task again
+    Then the task is "done"
+    And there is 1 run
+    And the run is "completed"
+    And the first phase ran once
+
+  Scenario: A workflow that cannot be planned blocks the task and says so
+    Given the task has the workflow "nonsense"
+    And "nonsense" cannot be planned
+    And the task is queued
+    When the engine runs the task
+    Then the task is "blocked"
+    And the run is "refused"
+    And the task says why it is blocked
+
+  Scenario: A step that runs too long is stopped and the task is blocked
+    Given the task has the workflow "development"
+    And "development" runs for longer than the deadline
+    And the task is queued
+    When the engine runs the task
+    Then the task is "blocked"
+    And the run is "timed-out"
+    And the step is "timed-out"
+
+  Scenario: A task the engine does not own is refused
+    Given the task has the workflow "development"
+    And every workflow succeeds
+    When the engine runs the task
+    Then it is refused
+    And the error says what state the task is in
+
+  Scenario: A task with nothing to run is blocked, not completed
+    Given the task has the workflow "development"
+    And every workflow succeeds
+    And the task is queued
+    And the workflows are taken away
+    When the engine runs the task
+    Then the task is "blocked"
+
+  Scenario: Running a task again records a second attempt
+    Given the task has the workflow "development"
+    And "development" fails with exit code 1
+    And the task is queued
+    And the engine has run the task
+    When the task is retried and the engine runs it again
+    Then there are 2 runs
+    And the newest run is attempt 2
+
+  Scenario: A completed workflow sets the flags it declares
+    Given the task has the workflow "worktree-create"
+    And "worktree-create" succeeds and provides "hasWorktree"
+    And the task is queued
+    When the engine runs the task
+    Then the task has the flag "hasWorktree"
+
+  Scenario: A workflow that fails earns nothing
+    Given the task has the workflow "worktree-create"
+    And "worktree-create" fails and would have provided "hasWorktree"
+    And the task is queued
+    When the engine runs the task
+    Then the task has no flags
+
+  Scenario: A workflow can clear a flag it invalidates
+    Given the task has the workflow "worktree-delete"
+    And the task already has the flag "hasWorktree"
+    And "worktree-delete" succeeds and clears "hasWorktree"
+    And the task is queued
+    When the engine runs the task
+    Then the task has no flags
+
+  Scenario: A failure can call for help before the task is blocked
+    Given the task has the workflow "development"
+    And "development" fails and calls "development-failure" on failure
+    And "development-failure" writes a diagnosis
+    And the task is queued
+    When the engine runs the task
+    Then there are 2 runs
+    And the recovery run is for "development-failure"
+    And the recovery run is "completed"
+    And the recovery was told which workflow failed
+    And the task is "blocked"
+
+  Scenario: A recovery that fails does not call for help itself
+    Given the task has the workflow "development"
+    And "development" fails and calls "development-failure" on failure
+    And "development-failure" fails and calls "development-failure" on failure
+    And the task is queued
+    When the engine runs the task
+    Then there are 2 runs
+    And the task is "blocked"
+
+  Scenario: A retry resumes at the workflow that failed
+    Given the task has the workflows "development, review"
+    And "development" succeeds
+    And "review" fails with exit code 1
+    And the task is queued
+    And the engine has run the task
+    When the task is retried and the engine runs it again
+    Then "development" ran once
+    And there are 3 runs
+
+  Scenario: A loop workflow goes back in the queue instead of finishing
+    Given the task has the workflow "watch"
+    And "watch" loops every 30 seconds
+    And the task is queued
+    When the engine runs the task
+    Then the task is "queued"
+    And the task waits 30 seconds before running again
+    And the run is "completed"
+    And the task is still on "watch"
+
+  Scenario: A loop's next iteration is a new run
+    Given the task has the workflow "watch"
+    And "watch" loops every 30 seconds
+    And the task is queued
+    And the engine has run the task
+    When the engine runs the task again
+    Then there are 2 runs
+    And the newest run is attempt 2
+
+  Scenario: What a phase produced is kept with the run
+    Given the task has the workflow "review"
+    And "review" writes "looks good" to the artifact it declares
+    And the task is queued
+    When the engine runs the task
+    Then the run has evidence from the phase "work"
+    And the evidence reads "looks good"
+
+  Scenario: An artifact a phase promised and did not produce is recorded and warned about
+    Given the task has the workflow "review"
+    And "review" declares an artifact and writes nothing
+    And the task is queued
+    When the engine runs the task
+    Then the run has evidence from the phase "work"
+    And the evidence is marked missing
+    And a problem says the artifact is not there
+
+  Scenario: Evidence waits with a task that stopped for approval
+    Given the task has the workflow "review"
+    And "review" writes "looks good" to the artifact it declares and then needs approval
+    And the task is queued
+    When the engine runs the task
+    Then the task is "awaiting_approval"
+    And the evidence reads "looks good"
+
+  Scenario: A flaky step is retried, and the run records how many attempts it took
+    Given the task has the workflow "flaky"
+    And "flaky" fails once then succeeds, with 1 retry
+    And the task is queued
+    When the engine runs the task
+    Then the task is "done"
+    And the step took 2 attempts
+
+  Scenario: A run a crash left behind is closed at boot
+    Given the task has the workflow "development"
+    And "development" was left running when Factory stopped
+    When Factory starts and reconciles
+    Then the run is "failed"
+    And the run says Factory stopped
+    And the task is "blocked"
+
+  Scenario: Reconciling leaves an approved task waiting rather than blocking it
+    Given the task has the workflow "development"
+    And "development" needs approval after its first phase and has a second phase
+    And the task is queued
+    And the engine has run the task
+    And the task is approved
+    When Factory starts and reconciles
+    Then the task is "running"
+    And nothing was closed
+
+  Scenario: Reconciling leaves a paused run alone
+    Given the task has the workflow "development"
+    And "development" needs approval after its first phase and has a second phase
+    And the task is queued
+    And the engine has run the task
+    When Factory starts and reconciles
+    Then the run is "paused"
+    And the task is "awaiting_approval"
+    And nothing was closed
+
+  Rule: an artifact keeps every version and the latest
+
+    A rerun should not throw away what it replaced. The newest sits where the
+    agent was told to write it, and a dated copy of each run goes beside it, so
+    a second opinion can be compared with the first rather than replacing it
+    silently.
+
+    Scenario: A produced artifact is kept, and a copy of it dated
+      Given the task has the workflow "review"
+      And "review" writes "looks good" to the artifact it declares
+      And the task is queued
+      When the engine runs the task
+      Then the run has evidence from the phase "work"
+      And a dated copy of the artifact was kept
+
+    Scenario: Running it again adds a version and updates the latest
+      Given the task has the workflow "review"
+      And "review" writes "looks good" to the artifact it declares
+      And the task is queued
+      And the engine has already run the task once
+      When the engine runs the task again
+      Then there are 2 dated copies
+      And the latest reads what the second run wrote
+
+    Scenario: Two artifacts in one run do not collide
+      Given the task has the workflow "two-artifacts"
+      And the task is queued
+      When the engine runs the task
+      Then the run has 2 pieces of evidence
+      And they are named "first, second"
+
+  Rule: a gate that asks first parks with its phase still to run
+
+    The difference from a review gate is the resume point, and getting it wrong
+    is worse than either behaviour on its own: resuming *past* an authorisation
+    gate would ask permission for a phase and then skip it, and resuming into
+    one without remembering the answer would ask for ever.
+
+    Scenario: Nothing of the gated phase has run when the task parks
+      Given the task has the workflow "development"
+      And "development" asks before its first phase and has a second phase
+      And the task is queued
+      When the engine runs the task
+      Then the task is "awaiting_approval"
+      And the run is "paused"
+      And no step has run at all
+      And the run continues from phase 0
+
+    Scenario: Approving runs the phase that was asked about, exactly once
+      Given the task has the workflow "development"
+      And "development" asks before its first phase and has a second phase
+      And the task is queued
+      And the engine has run the task
+      When the task is approved
+      And the engine runs the task again
+      Then the task is "done"
+      And there is 1 run
+      And the first phase ran once
+      And the second phase ran once
+
+  Rule: a loop with a repeat count stops when it has done them
+
+    A loop used to go round until somebody noticed, which is a poor default for
+    something that spawns agents. The count is derived from the runs rather than
+    kept in a column of its own: a counter would be a second copy of what the
+    runs already say, and the two would disagree the first time a run was
+    deleted.
+
+    Scenario: A loop set to repeat once runs once and is done
+      Given the task has the workflow "watch"
+      And "watch" loops every 30 seconds, repeating 1 time
+      And the task is queued
+      When the engine runs the task
+      Then the task is "done"
+      And there is 1 run
+
+    Scenario: A loop set to repeat twice goes round again first
+      Given the task has the workflow "watch"
+      And "watch" loops every 30 seconds, repeating 2 times
+      And the task is queued
+      When the engine runs the task
+      Then the task is "queued"
+      And the task is still on "watch"
+
+    Scenario: And stops on the second pass
+      Given the task has the workflow "watch"
+      And "watch" loops every 30 seconds, repeating 2 times
+      And the task is queued
+      And the engine has run the task
+      When the engine runs the task again
+      Then the task is "done"
+      And there are 2 runs
+
+    Scenario: A loop with no repeat keeps going
+      Given the task has the workflow "watch"
+      And "watch" loops every 30 seconds
+      And the task is queued
+      And the engine has run the task
+      When the engine runs the task again
+      Then the task is "queued"
+
+  Rule: what runs next is whatever is ticked, and only that
+
+    This replaced an integer cursor. The cursor was right — a retry did resume —
+    but nothing on screen showed it, and any edit to the list reset it, because
+    a position in the old list means nothing in the new one.
+
+    Scenario: An unticked workflow is passed over
+      Given the task has the workflows "development, review"
+      And "development" is unticked
+      And the task is queued
+      When the engine runs the task
+      Then there is 1 run
+      And the runs are for "review" in that order
+
+    Scenario: A workflow that completes unticks itself
+      Given the task has the workflows "development, review"
+      And the task is queued
+      When the engine runs the task
+      Then "development" is unticked
+      And "review" is unticked
+
+    Scenario: A workflow that failed stays ticked
+      Given the task has the workflows "development, review"
+      And "review" fails
+      And the task is queued
+      When the engine runs the task
+      Then "development" is unticked
+      And "review" is still ticked
+
+    Scenario: Fixing it and running again does only what is left
+      Given the task has the workflows "development, review"
+      And "review" fails
+      And the task is queued
+      And the engine has run the task
+      When "review" is fixed
+      And the task is retried
+      And the engine runs the task again
+      Then "development" ran once
+      And the task is "done"
+
+    Scenario: A task queued with nothing ticked is blocked, not completed
+      Given the task has the workflows "development, review"
+      And every workflow is unticked
+      And the task is queued
+      When the engine runs the task
+      Then the task is "blocked"
+      And there are 0 runs
+
+  Rule: a task's agent session is written down once it really exists
+
+    Factory chooses the session id so a conversation can be resumed exactly —
+    by the next phase, by a re-run, and by a person opening a terminal in the
+    task's directory. Choosing it means recording it, and *when* it is recorded
+    is the whole of this rule.
+
+    It is recorded after the process that starts the session has actually
+    spawned, and never before. An id written down at plan time would outlive a
+    spawn that failed — no CLI on PATH, a directory that had gone — and every
+    later run would ask the CLI to resume a conversation that was never had,
+    which it refuses. With nothing recorded, the next run simply starts one.
+
+    Scenario: The session is written down after the step that starts it
+      Given the task has the workflow "development"
+      And "development" runs an agent step that starts a session
+      And the task is queued
+      When the engine runs the task
+      Then the task carries the session "session-1"
+      And the session belongs to "claude"
+
+    Scenario: A later run is told the session already exists
+      Given the task has the workflow "development" twice
+      And "development" runs an agent step that starts a session
+      And the task is queued
+      When the engine runs the task
+      Then the first plan was told to start "session-1"
+      And the second plan was told "session-1" already exists
+
+    Scenario: A step that could not be started records nothing
+      Given the task has the workflow "development"
+      And "development" runs an agent step whose command does not exist
+      And the task is queued
+      When the engine runs the task
+      # Nothing spawned, so no conversation exists. Recording the id here would
+      # leave the task asking to resume one for ever.
+      Then the task carries no session
+      And the task is "blocked"
+
+    Scenario: And the run after it starts a fresh one
+      Given the task has the workflow "development"
+      And "development" runs an agent step whose command does not exist
+      And the task is queued
+      When the engine runs the task
+      And the task is retried
+      Then the second plan was told to start a session
+
+    Scenario: A step that starts no session records nothing
+      Given the task has the workflow "development"
+      And "development" prints "building" and succeeds
+      And the task is queued
+      When the engine runs the task
+      # A shell step, or an agent step with no session scope, or a provider
+      # with no session support: the plan says so, and nothing is recorded.
+      Then the task carries no session
+
+    Scenario: A recovery workflow is given the same session
+      Given the task has the workflow "development"
+      And "development" runs an agent step that starts a session then fails
+      And "development-failure" looks into it
+      And the task is queued
+      When the engine runs the task
+      # The agent asked to diagnose a failure wants the conversation that
+      # produced it, not a fresh one.
+      Then the recovery plan was told "session-1" already exists

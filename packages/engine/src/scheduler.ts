@@ -1,0 +1,379 @@
+import type { Scheduling, Task } from '@factory/core'
+import type { RunRepository, TaskRepository } from '@factory/store'
+import type { EventBus } from '@factory/events'
+
+/**
+ * Deciding what runs next.
+ *
+ * The engine runs one task. The scheduler decides which tasks reach it, and the
+ * whole of that decision is here: queue order, how many things may run at once,
+ * and the one rule about lanes.
+ *
+ * Lanes come from the workflow, not the task. A workflow marked `sequential`
+ * says "do not run this alongside other work" — it touches the same branch, the
+ * same database, the same port — so at most one sequential workflow runs at a
+ * time. Parallel workflows fill the rest of the capacity. The prototype encoded
+ * this as two task states (`active_parallel`, `active_sequential`), which meant
+ * every rule about running had to be written twice and a task could end up in
+ * the wrong half of the machine.
+ *
+ * Three decisions worth stating, because all of them are visible behaviour:
+ *
+ * A task waiting for approval does **not** hold a slot. It is waiting for a
+ * person who may be asleep, and a queue that stalls behind an unattended gate
+ * is a queue that stops.
+ *
+ * It does, however, hold its project's *working copy* when that project works in
+ * place rather than in a worktree per task. The two are not in tension: a slot
+ * is global and must never be held by an absent person, while a working copy is
+ * one repository's and is genuinely occupied — the parked task's uncommitted
+ * changes are sitting in the tree, and a second task would edit them underneath
+ * whoever is reviewing. The blast radius of that stall is one project.
+ *
+ * Queue position is a priority, not a barrier. If the task at the head is
+ * sequential and a sequential workflow is already running, the scheduler looks
+ * past it rather than idling — otherwise one long sequential task holds up
+ * everything behind it, including work that could safely run now.
+ *
+ * Conditions are the third question. A workflow can declare that it requires a
+ * flag — `hasWorktree`, `hasEnvironment` — and the scheduler passes over a task
+ * that does not hold it yet. The task stays queued rather than failing: the
+ * workflow that provides the flag may be running right now, and the next tick
+ * will pick this one up. What it must never do is run anyway: the prototype's
+ * gate existed precisely because a phase that assumes a worktree does damage
+ * without one.
+ */
+
+/** How many tasks may be running at once when nothing says otherwise. */
+export const DEFAULT_MAX_PARALLEL = 3
+
+export interface SchedulerOptions {
+  readonly tasks: TaskRepository
+  readonly runs: RunRepository
+  /**
+   * Hands a task to the engine. Injected so the scheduler can be specified
+   * without running processes, and so a future distributed runner can replace
+   * it without touching this decision logic.
+   */
+  readonly start: (taskId: string) => Promise<unknown>
+  /**
+   * What the scheduler needs to know about a workflow. Looked up rather than
+   * passed in, because the answer lives in the definition and can change
+   * between ticks — and looked up once, so the two questions cannot disagree.
+   *
+   * Asked per project, because a name does not mean one thing installation-wide:
+   * a repository can define its own `deploy`, and that is the one its tasks run.
+   * A lookup that ignored the project would read the wrong file's `sequential:`
+   * and let two tasks into a lane meant for one.
+   */
+  readonly workflow: (name: string, projectId?: string) => WorkflowFacts | undefined
+  /**
+   * What a project says about itself. Optional, and absence means no project
+   * ever serialises anything — the same degrade-by-absence as everything else
+   * here, and what lets a scheduler be built without a project store at all.
+   */
+  readonly project?: (id: string) => ProjectFacts | undefined
+  readonly maxParallel?: number
+  readonly events?: EventBus
+  /** Injected so a waiting task's deadline is testable. */
+  readonly now?: () => Date
+}
+
+/** What a workflow definition says about how it may be scheduled. */
+export interface WorkflowFacts {
+  readonly scheduling: Scheduling
+  /** Flags the task must hold before this workflow may run. */
+  readonly requires?: readonly string[]
+  /** Flags it sets when it completes. Used to tell a wait apart from a dead end. */
+  readonly provides?: readonly string[]
+  /**
+   * Workflows that must come before this one.
+   *
+   * The scheduler does not gate on these — assembling the list is the builder's
+   * job, and a task's list is a plan somebody wrote. Doctor reports a list that
+   * got assembled another way, and reads it from this lookup so it cannot
+   * disagree with the scheduler about what a name means.
+   */
+  readonly needs?: readonly string[]
+  /**
+   * Which scope this name resolved from, for this task's project.
+   *
+   * The scheduler does not care; doctor does. Carried on the same lookup rather
+   * than a second one so the two can never disagree about which file a name
+   * means — which, once definitions resolve per project, is a real possibility.
+   */
+  readonly scope?: string
+  /** Set when the definition says a project must supply its own copy. */
+  readonly override?: string
+  /** Where that copy would go, so a warning can name the file. */
+  readonly overridePath?: string
+}
+
+/** What a project says about how much of its work can happen at once. */
+export interface ProjectFacts {
+  readonly name: string
+  /**
+   * False when work happens in the project's own checkout.
+   *
+   * Everything in one directory means one task at a time; there is no way to
+   * share a working copy safely between two agents.
+   */
+  readonly usesWorktrees: boolean
+}
+
+/** Why a queued task was passed over. Reported, never silent. */
+export type SkipReason =
+  | 'at capacity'
+  | 'the project runs one task at a time'
+  | 'a sequential workflow is already running'
+  | 'a required flag is not set'
+  | 'waiting for its next iteration'
+
+export interface SkippedTask {
+  readonly task: Task
+  readonly reason: SkipReason
+  /** What exactly is missing, when the reason alone does not say. */
+  readonly detail?: string
+}
+
+export interface TickReport {
+  readonly started: readonly Task[]
+  readonly skipped: readonly SkippedTask[]
+  readonly running: number
+  readonly capacity: number
+}
+
+export class Scheduler {
+  readonly #tasks: TaskRepository
+  readonly #runs: RunRepository
+  readonly #start: (taskId: string) => Promise<unknown>
+  readonly #workflow: (name: string, projectId?: string) => WorkflowFacts | undefined
+  readonly #project: (id: string) => ProjectFacts | undefined
+  readonly #maxParallel: number
+  readonly #events: EventBus | undefined
+  readonly #now: () => Date
+  readonly #inFlight = new Set<Promise<unknown>>()
+  /** Tasks handed over and not yet finished, so a second tick cannot repeat one. */
+  readonly #active = new Set<string>()
+  #ticking = false
+  #again = false
+
+  constructor(options: SchedulerOptions) {
+    this.#tasks = options.tasks
+    this.#runs = options.runs
+    this.#start = options.start
+    this.#workflow = options.workflow
+    this.#project = options.project ?? (() => undefined)
+    this.#maxParallel = options.maxParallel ?? DEFAULT_MAX_PARALLEL
+    this.#events = options.events
+    this.#now = options.now ?? (() => new Date())
+  }
+
+  /**
+   * Start everything that can start right now.
+   *
+   * Synchronous on purpose: it admits tasks and hands them over, and the work
+   * itself happens on its own. A tick that awaited each run would admit one task
+   * per tick and call it a scheduler.
+   */
+  tick(): TickReport {
+    if (this.#ticking) {
+      // Something inside a tick asked for another one. Do it after, not during:
+      // admitting the same task twice is exactly what the running-count guard
+      // exists to prevent.
+      this.#again = true
+      return { started: [], skipped: [], running: 0, capacity: 0 }
+    }
+
+    this.#ticking = true
+    try {
+      return this.#tick()
+    } finally {
+      this.#ticking = false
+      if (this.#again) {
+        this.#again = false
+        this.tick()
+      }
+    }
+  }
+
+  #tick(): TickReport {
+    const running = this.#tasks.list({ state: 'running' })
+    let capacity = this.#maxParallel - running.length
+    let sequentialBusy = running.some((task) => this.#factsFor(task).scheduling === 'sequential')
+
+    // Who is holding a shared working copy: everything running, plus everything
+    // parked at a gate with uncommitted changes still in the tree. Keyed by
+    // project and holding the task, because "busy" is not a useful thing to be
+    // told without being told by whom.
+    const busyProjects = new Map<string, Task>()
+    for (const task of [...running, ...this.#tasks.list({ state: 'awaiting_approval' })]) {
+      const held = this.#sharedCheckoutOf(task)
+      if (held !== undefined && !busyProjects.has(held)) busyProjects.set(held, task)
+    }
+
+    const started: Task[] = []
+    const skipped: SkippedTask[] = []
+
+    // Resumed first. A task someone approved is already running and is holding
+    // a paused run: it occupies its slot either way, and nothing else would
+    // ever pick it up — the approval would sit there forever, which is exactly
+    // what it did the first time this was tried without this loop.
+    for (const task of running) {
+      if (this.#active.has(task.id)) continue
+      if (this.#runs.pausedFor(task.id) === undefined) continue
+      this.#hand(task)
+      started.push(task)
+    }
+
+    for (const task of this.#tasks.list({ state: 'queued' })) {
+      if (capacity <= 0) {
+        skipped.push({ task, reason: 'at capacity' })
+        continue
+      }
+
+      // A loop workflow between iterations. Skipped rather than started, and
+      // left in the queue, because the wait is the point.
+      if (task.runnableAt !== undefined && task.runnableAt > this.#now().toISOString()) {
+        skipped.push({
+          task,
+          reason: 'waiting for its next iteration',
+          detail: `not before ${task.runnableAt}`,
+        })
+        continue
+      }
+
+      // Before the lane check on purpose. When both apply, "a sequential
+      // workflow is already running" points at a task in some other project,
+      // which nobody can act on; this names the sibling in the way.
+      const shared = this.#sharedCheckoutOf(task)
+      const holder = shared === undefined ? undefined : busyProjects.get(shared)
+      if (shared !== undefined && holder !== undefined) {
+        skipped.push({
+          task,
+          reason: 'the project runs one task at a time',
+          detail: `${this.#project(shared)?.name ?? shared} — "${holder.name}" has it`,
+        })
+        continue
+      }
+
+      const facts = this.#factsFor(task)
+      const unmet = (facts.requires ?? []).filter((flag) => !task.flags.includes(flag))
+      if (unmet.length > 0) {
+        skipped.push({
+          task,
+          reason: 'a required flag is not set',
+          detail: unmet.join(', '),
+        })
+        continue
+      }
+
+      const lane = facts.scheduling
+      if (lane === 'sequential' && sequentialBusy) {
+        skipped.push({ task, reason: 'a sequential workflow is already running' })
+        continue
+      }
+
+      // Marked running here, before the engine is called: the engine's own
+      // `start` happens inside an async call, and a second tick in between would
+      // see the task still queued and hand it over twice.
+      const admitted = this.#tasks.act(task.id, 'start')
+      capacity -= 1
+      if (lane === 'sequential') sequentialBusy = true
+      if (shared !== undefined) busyProjects.set(shared, admitted)
+      started.push(admitted)
+      this.#hand(admitted)
+    }
+
+    return { started, skipped, running: running.length, capacity: Math.max(capacity, 0) }
+  }
+
+  /** Hand a task to the engine, and make sure nothing is left looking busy. */
+  #hand(task: Task): void {
+    this.#active.add(task.id)
+    const work = this.#start(task.id)
+      .catch((error: unknown) => {
+        // A task that cannot even be handed over must not take the scheduler
+        // down with it, and must not be left looking busy forever.
+        const reason = error instanceof Error ? error.message : String(error)
+        if (this.#tasks.get(task.id)?.state === 'running') {
+          this.#tasks.act(task.id, 'block', { reason })
+        }
+      })
+      .finally(() => {
+        this.#active.delete(task.id)
+        this.#inFlight.delete(work)
+      })
+    this.#inFlight.add(work)
+  }
+
+  /**
+   * Tick whenever something changes that could free or fill a slot.
+   *
+   * Deferred to a microtask rather than run inside the handler: the events that
+   * matter are emitted from inside the store's transaction, and ticking there
+   * would try to open a transaction inside one — which the store refuses, in
+   * the middle of someone else's write.
+   */
+  watch(): () => void {
+    if (this.#events === undefined) return () => {}
+    const wake = (): void => {
+      queueMicrotask(() => {
+        this.tick()
+      })
+    }
+    const offs = [
+      this.#events.on('task.transitioned', wake),
+      this.#events.on('run.completed', wake),
+    ]
+    return () => {
+      for (const off of offs) off()
+    }
+  }
+
+  /** Wait for everything this scheduler handed over. For shutdown, and for tests. */
+  async settle(): Promise<void> {
+    while (this.#inFlight.size > 0) {
+      await Promise.all([...this.#inFlight])
+    }
+  }
+
+  /**
+   * The project whose single working copy this task would occupy, if any.
+   *
+   * Undefined for a task with no project, a project nobody can look up — one
+   * removed while the task was queued — and any project that gives each task a
+   * worktree. In all three cases there is nothing to serialise against, and
+   * defaulting to "exclusive" would stall work for no reason.
+   */
+  #sharedCheckoutOf(task: Task): string | undefined {
+    if (task.projectId === undefined) return undefined
+    const project = this.#project(task.projectId)
+    if (project === undefined || project.usesWorktrees) return undefined
+    return task.projectId
+  }
+
+  /**
+   * What the workflow this task is on says about itself.
+   *
+   * An unknown workflow is treated as sequential with no requirements: the
+   * engine will record why it could not be planned — that is its job, and it
+   * writes a run explaining it — while in the meantime it does not get to run
+   * alongside anything.
+   */
+  #factsFor(task: Task): WorkflowFacts {
+    // `.workflow`, not the entry: this was `task.workflows[0] as string` when
+    // the list held names, and a cast is exactly the kind of thing that keeps
+    // compiling after the type under it changes shape.
+    //
+    // Still the newest run's workflow first, which is a known divergence from
+    // "the one about to run" — after an `on_fail` the newest run is the
+    // recovery workflow, so a retry is admitted on its lane and requirements.
+    // Left alone deliberately: fixing it changes which tasks the scheduler
+    // admits, and that belongs in its own change with its own scenario.
+    const current =
+      this.#runs.forTask(task.id)[0]?.workflow ?? task.workflows[0]?.workflow
+    if (current === undefined) return { scheduling: 'sequential' }
+    return this.#workflow(current, task.projectId) ?? { scheduling: 'sequential' }
+  }
+}

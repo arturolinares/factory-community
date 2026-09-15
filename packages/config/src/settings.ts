@@ -1,0 +1,249 @@
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { z } from 'zod'
+import { closedWithExtensions, problemsFromZod, type Problem } from '@factory/core'
+import type { ScopeChain } from './scopes.js'
+
+/**
+ * Factory's own settings, in the user scope, beside `config.yaml`.
+ *
+ * Three stores were possible and two were wrong. `config.yaml` is hand-written
+ * and carries the author's comments, and a slider that saves on every drag has
+ * no business rewriting it. The database sits in the *default write scope*, so
+ * it is per-repository rather than per-person — a "global" preference kept
+ * there would silently differ depending on which directory the daemon started
+ * in. What is left is a small file Factory owns, which is the pattern Pro
+ * already follows with `pro-licence`.
+ *
+ * Because Factory owns it, unlike `config.yaml` it gets a schema — so an
+ * unknown key is a diagnostic rather than silence.
+ *
+ * Read before any plugin loads, which is what lets `plugins.disabled` mean
+ * "never imported" rather than "imported and ignored".
+ */
+export const SETTINGS_FILE = 'settings.json'
+export const SETTINGS_KIND = 'factory.settings/v1'
+
+/** The largest interface scale, so 3× is a promise rather than a slider's end. */
+export const MAX_UI_SCALE = 3
+
+const shape = {
+  kind: z.literal(SETTINGS_KIND).optional(),
+  ui: closedWithExtensions({
+    /**
+     * Interface scale, applied the way Cmd+ applies it.
+     *
+     * 1 is the size the board was designed at. Bounded because a stored 40
+     * would render a window nobody can click out of, and the file is editable
+     * by hand.
+     */
+    scale: z.number().min(1).max(MAX_UI_SCALE).default(1),
+  }).default({ scale: 1 }),
+  plugins: closedWithExtensions({
+    /**
+     * Plugins the installation has switched off.
+     *
+     * Identified by how each got here: a built-in by its manifest name, a
+     * declared one by the specifier written in `config.yaml`. The second is
+     * the only handle that exists *before* the module is imported, and not
+     * importing it is the whole point.
+     */
+    disabled: z.array(z.string().min(1)).default([]),
+  }).default({ disabled: [] }),
+}
+
+const settingsSchema = closedWithExtensions(shape)
+
+export type FactorySettings = z.infer<typeof settingsSchema>
+
+export interface SettingsPatch {
+  readonly ui?: { readonly scale?: number }
+  readonly plugins?: { readonly disabled?: readonly string[] }
+}
+
+/** What an installation with no settings file behaves as. */
+export const DEFAULT_SETTINGS: FactorySettings = settingsSchema.parse({})
+
+/**
+ * Where the file lives.
+ *
+ * Off the resolved chain's user scope, never by asking the OS a second time:
+ * `userScopeRoot` already answered that question at discovery, and a second
+ * call can disagree with the first — the user scope here is the legacy
+ * `~/.factory` on a machine that never moved, and `resolveScopes` is the one
+ * place allowed to know.
+ *
+ * Undefined when the chain has no user scope at all, which is what an explicit
+ * `FACTORY_SCOPES` override can produce.
+ */
+export function settingsPath(chain: ScopeChain): string | undefined {
+  const user = chain.scopes.find((scope) => scope.kind === 'user')
+  return user === undefined ? undefined : join(user.root, SETTINGS_FILE)
+}
+
+/**
+ * The settings, and anything wrong with the file.
+ *
+ * Nothing throws. A file that will not parse is a Problem and the defaults
+ * apply, for the reason `loadDeclaredPlugins` gives about a broken plugin: the
+ * only way to diagnose it is a tool that still starts.
+ */
+export function readSettings(chain: ScopeChain): {
+  settings: FactorySettings
+  file?: string
+  problems: readonly Problem[]
+} {
+  const file = settingsPath(chain)
+  if (file === undefined) return { settings: DEFAULT_SETTINGS, problems: [] }
+
+  let raw: string
+  try {
+    raw = readFileSync(file, 'utf8')
+  } catch {
+    // No file is the ordinary case, not an error, and creates nothing.
+    return { settings: DEFAULT_SETTINGS, file, problems: [] }
+  }
+  return { ...parse(raw, file), file }
+}
+
+/**
+ * Change some of it, and leave the rest alone.
+ *
+ * Merged one level down rather than replaced, so writing a scale cannot drop
+ * the disabled list — the two halves of this file are owned by different parts
+ * of the board and will be written from different pages.
+ *
+ * Written to a temporary file and renamed, so an interrupted write cannot
+ * leave a half-file where settings used to be. And **read back through the
+ * schema before the rename**: a file Factory wrote is a file Factory can load,
+ * and the cheapest place to keep that promise is here.
+ */
+export function writeSettings(
+  chain: ScopeChain,
+  patch: SettingsPatch,
+): { settings: FactorySettings; file?: string; problems: readonly Problem[] } {
+  const file = settingsPath(chain)
+  if (file === undefined) {
+    return {
+      settings: DEFAULT_SETTINGS,
+      problems: [
+        {
+          severity: 'error',
+          message: 'There is no user scope to save settings in.',
+          rule: 'settings.noUserScope',
+        },
+      ],
+    }
+  }
+
+  const current = readSettings(chain).settings
+  const merged = {
+    ...current,
+    kind: SETTINGS_KIND,
+    ui: { ...current.ui, ...(patch.ui ?? {}) },
+    plugins: {
+      ...current.plugins,
+      ...(patch.plugins === undefined
+        ? {}
+        : patch.plugins.disabled === undefined
+          ? {}
+          : { disabled: [...patch.plugins.disabled] }),
+    },
+  }
+
+  const text = `${JSON.stringify(merged, undefined, 2)}\n`
+  const checked = parse(text, file)
+  if (checked.problems.length > 0) return { settings: current, file, problems: checked.problems }
+
+  const temporary = `${file}.tmp`
+  try {
+    writeFileSync(temporary, text)
+    renameSync(temporary, file)
+  } catch (error) {
+    try {
+      unlinkSync(temporary)
+    } catch {
+      // It may never have been created. Nothing to clean up, nothing to say.
+    }
+    return {
+      settings: current,
+      file,
+      problems: [
+        {
+          severity: 'error',
+          message: `Could not save settings to ${file}: ${describe(error)}`,
+          file,
+          rule: 'settings.writeFailed',
+        },
+      ],
+    }
+  }
+  return { settings: checked.settings, file, problems: [] }
+}
+
+/**
+ * One live copy of the settings.
+ *
+ * The increment's sharpest risk is two meanings of "disabled": the loader
+ * consults the list at startup and the task tools consult it per request, and
+ * a second copy anywhere drifts into "the button is gone but the code still
+ * runs", or the reverse. So there is one holder, and both read it.
+ */
+export interface SettingsHolder {
+  current(): FactorySettings
+  /** The file, when there is a user scope to hold one. */
+  readonly file?: string
+  /** Problems from reading it at startup. Reported by doctor. */
+  readonly problems: readonly Problem[]
+  update(patch: SettingsPatch): { settings: FactorySettings; problems: readonly Problem[] }
+}
+
+export function settingsHolder(chain: ScopeChain): SettingsHolder {
+  const initial = readSettings(chain)
+  let settings = initial.settings
+
+  return {
+    current: () => settings,
+    ...(initial.file === undefined ? {} : { file: initial.file }),
+    problems: initial.problems,
+    update: (patch) => {
+      const written = writeSettings(chain, patch)
+      if (written.problems.length === 0) settings = written.settings
+      return { settings, problems: written.problems }
+    },
+  }
+}
+
+function parse(
+  raw: string,
+  file: string,
+): { settings: FactorySettings; problems: readonly Problem[] } {
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch (error) {
+    return {
+      settings: DEFAULT_SETTINGS,
+      problems: [
+        {
+          severity: 'error',
+          message: `${file} is not valid JSON: ${describe(error)}. Using defaults.`,
+          file,
+          rule: 'settings.unparseable',
+        },
+      ],
+    }
+  }
+
+  const parsed = settingsSchema.safeParse(value)
+  if (!parsed.success) {
+    return {
+      settings: DEFAULT_SETTINGS,
+      problems: problemsFromZod(parsed.error, { file }),
+    }
+  }
+  return { settings: parsed.data, problems: [] }
+}
+
+const describe = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)

@@ -1,0 +1,51 @@
+# GitHub Copilot CLI.
+#
+# Flags verified against `copilot --help` on 2026-09-08.
+kind: factory.provider/v1
+id: copilot
+displayName: GitHub Copilot
+summary: GitHub's coding agent.
+command: copilot
+install: npm install -g @github/copilot
+docs: https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli
+
+supports:
+  - non_interactive
+  - session_resume
+  - tool_use
+  - file_access
+  - mcp
+
+# Copilot's `--model` takes a concrete id, not a tier alias, so these need
+# checking when GitHub retires one — the CLI validates the value and exits
+# immediately, which at least fails fast and clearly.
+models:
+  strong: claude-opus-5
+  balanced: claude-sonnet-5
+  fast: claude-haiku-4-5
+
+promptFlag: '-p'
+modelFlag: '--model'
+# No effort setting; a phase that sets one gets a doctor warning rather than
+# silently having it ignored.
+subagentFlag: '--agent'
+
+session:
+  # `--continue` resumes the most recent session *globally*, which would let two
+  # tasks running in parallel contaminate each other. An explicit id keeps them
+  # apart while still carrying context forward.
+  #
+  # No `resumeFlag`: `--session-id` both sets the UUID of a new session and
+  # resumes one by id, which is what `resumeFlag` falling back to `idFlag` is
+  # for. This descriptor is unchanged — what changed is that something now
+  # supplies an id, so `session_resume` finally does anything here.
+  mode: id
+  idFlag: '--session-id'
+
+# --allow-all-tools is required for non-interactive use, and --no-ask-user stops
+# the agent blocking forever on a question nobody is there to answer.
+permissionArgs: ['--allow-all-tools', '--allow-all-paths', '--allow-all-urls']
+extraArgs: ['--no-color', '--no-ask-user', '--log-level', 'none']
+
+stdin: /dev/null
+env: {}

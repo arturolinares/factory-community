@@ -1,0 +1,28 @@
+# The development pipeline.
+#
+# Kept here rather than in the user scope so the whole team gets the same one.
+kind: factory.workflow/v1
+name: development
+description: Analysis, design, implementation, testing.
+
+# Loops until someone ends it; 30s between passes.
+mode: loop
+interval: 30
+scheduling: sequential
+
+variables:
+  region: eu-west-1        # used by the deploy step
+  channel: '#builds'
+
+# Only run once the workspace is actually set up.
+conditions:
+  requires:
+    - hasWorktree
+    - hasEnvironment
+
+on_fail: development-failure
+
+phases:
+  - analysis
+  - implement
+  - test

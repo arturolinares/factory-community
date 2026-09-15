@@ -1,0 +1,50 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/events"
+    },
+    {
+      "path": "./packages/store"
+    },
+    {
+      "path": "./packages/engine"
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/config"
+    },
+    {
+      "path": "./packages/plugin-sdk"
+    },
+    {
+      "path": "./packages/runtime"
+    },
+    {
+      "path": "./packages/plugins/provider-claude"
+    },
+    {
+      "path": "./packages/plugins/task-terminal"
+    },
+    {
+      "path": "./packages/plugins/task-session"
+    },
+    {
+      "path": "./packages/plugins/task-diffity"
+    },
+    {
+      "path": "./packages/plugins/provider-codex"
+    },
+    {
+      "path": "./packages/plugins/provider-copilot"
+    },
+    {
+      "path": "./apps/cli"
+    },
+    {
+      "path": "./apps/daemon"
+    }
+  ]
+}

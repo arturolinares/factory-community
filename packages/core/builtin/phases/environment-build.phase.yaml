@@ -1,0 +1,10 @@
+kind: factory.phase/v1
+name: environment-build
+description: Build the environment. Replace this with what your project actually needs.
+steps:
+  # Deliberately inert. A built-in that ran `docker compose up` would be right
+  # for one project and destructive for the next, so this one says what to do
+  # instead of doing something.
+  - run: >-
+      echo "environment-build has not been written for this project yet.
+      Save your own copy over it — see .xaedalon/.factory/phases/environment-build.phase.yaml"

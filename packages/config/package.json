@@ -1,0 +1,28 @@
+{
+  "name": "@factory/config",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Scope discovery and layered definition resolution.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@factory/core": "workspace:*",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@factory/provider-claude": "workspace:*",
+    "@factory/provider-copilot": "workspace:*",
+    "zod": "^4.5.4"
+  }
+}

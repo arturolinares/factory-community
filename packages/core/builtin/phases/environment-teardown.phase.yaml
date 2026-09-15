@@ -1,0 +1,7 @@
+kind: factory.phase/v1
+name: environment-teardown
+description: Remove the environment and anything it was holding.
+steps:
+  - run: >-
+      echo "environment-teardown has not been written for this project yet.
+      Save your own copy over it — see .xaedalon/.factory/phases/environment-teardown.phase.yaml"

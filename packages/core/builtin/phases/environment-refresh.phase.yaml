@@ -1,0 +1,7 @@
+kind: factory.phase/v1
+name: environment-refresh
+description: Bring the environment back in line with the repository.
+steps:
+  - run: >-
+      echo "environment-refresh has not been written for this project yet.
+      Save your own copy over it — see .xaedalon/.factory/phases/environment-refresh.phase.yaml"

@@ -1,0 +1,6 @@
+# The definitions Factory ships with.
+#
+# Read-only: this scope lives inside the installed package. To change one of
+# these, save a copy into your project or user scope — it will shadow this one.
+kind: factory.scope/v1
+scope: builtin
