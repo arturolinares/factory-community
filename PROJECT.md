@@ -641,19 +641,27 @@ These are architecture, not style. Several are enforced mechanically; where they
 ## Layout
 
 ```
-factory/
+factory/                   a layout on a machine, not a checkout — see below
 ├── factory-community/     Apache-2.0 · its own pnpm workspace · publishable
 │   ├── packages/
 │   │   ├── core/          capability contracts, host, registries, schemas, resolvePlan
 │   │   ├── events/        the typed event bus
-│   │   ├── config/        scope discovery and layered resolution
+│   │   ├── config/        scope discovery, layered resolution, settings, the plugin catalogue
 │   │   ├── plugin-sdk/    the only surface plugins — and Pro — import
 │   │   └── plugins/       provider-claude · provider-codex · provider-copilot
+│   │                      task-terminal · task-session · task-diffity
 │   └── apps/              daemon (127.0.0.1:7317) · web · cli
 │
 └── factory-pro/           proprietary · separate workspace · depends one-way on the above
-    └── packages/capability-desktop/
+    └── packages/          capability-desktop · desktop (the Electron shell)
 ```
+
+**Two repositories, and the directory above them is neither.** Community and Pro are separate git
+repositories with separate installs; the directory that holds both is a layout on a developer's
+machine, and no commit contains the pair. So **nothing here may cite a file over there** — the build
+notes and the interface mockups are not public, and a comment that sends a reader somewhere they
+cannot go is worse than no comment. `pnpm verify:standalone` proves the split mechanically, by
+moving `factory-pro/` aside and running the whole suite without it.
 
 ## Specification index
 
