@@ -6,8 +6,8 @@ import { MODEL_ROLES } from '../builtins/steps.js'
  * A provider is a descriptor, not a class.
  *
  * Adding support for a new coding agent should be a YAML file, not a code
- * change — that is what PLAN.md §9 means by provider independence, and it is
- * what makes the `generic-cli` story real rather than aspirational. All three
+ * change — which is what provider independence has to mean, and what makes
+ * the `generic-cli` story real rather than aspirational. All three
  * built-in providers are descriptors handed to one renderer.
  *
  * It also puts model ids where they belong: in data. They move faster than

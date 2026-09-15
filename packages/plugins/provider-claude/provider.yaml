@@ -49,7 +49,7 @@ session:
   # So Factory chooses the id. `--session-id` starts the session and `--resume`
   # continues it; they are not interchangeable — each refuses the other's case
   # ("already in use" / "no conversation found with session ID"). Verified
-  # against the real CLI on 2026-09-14; see learnings.md.
+  # against the real CLI on 2026-09-14.
   mode: id
   idFlag: '--session-id'
   resumeFlag: '--resume'

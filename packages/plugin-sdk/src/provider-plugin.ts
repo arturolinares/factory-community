@@ -15,7 +15,7 @@ import {
  *
  * All three built-in providers are exactly this and nothing more: a YAML file
  * plus one call. Adding a fourth agent needs no code at all, which is what
- * PLAN.md §9's provider independence has to mean if it means anything.
+ * provider independence has to mean if it means anything.
  */
 export function defineProviderPlugin(options: {
   name: string
