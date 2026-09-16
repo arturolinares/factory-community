@@ -15,12 +15,17 @@ This document is the source of truth, written as the project is built.
 
 ## Status
 
-**Three increments in, and the whole loop works**: author a workflow in the browser or by hand,
+**Seventeen increments in, and the whole loop works**: author a workflow in the browser or by hand,
 point a task at a repository, queue it, and the daemon gives it a worktree, runs the agents, keeps
 what they printed and what they produced, stops at the gate you asked for, and continues when you
 approve. From a terminal, from the board, or from Pro's desktop app — the same API either way.
-2,292 Gherkin steps green below the browser, 60 browser scenarios, and a smoke run against a real
-installation.
+**4,762 Gherkin steps green below the browser** across 49 feature files and 1,012 scenarios, 132 of
+them in a real browser, and smoke runs against the real agent CLIs.
+
+Since increment 17 an agent is also **confined to the workspace it was given**, handed an
+environment with the credentials taken out, and stoppable — process tree and all. What that
+guarantees, and where it stops, is [`docs/security/`](docs/security/); the short version is that
+Factory is not a sandbox and says so.
 
 `factory setup` is where a new machine starts: what is still missing, and the command that fixes
 each one. It is a registry, so the answer comes from whoever knows it — the provider plugins, the
@@ -545,6 +550,82 @@ so is Diffity.
 Pro calls neither (`desktop/src/main.ts` uses `/api/tasks`, `/api/tasks/:id` and
 `/actions/:action`), so nothing broke — but keeping either beside its replacement would have been
 one idea with two implementations, which is the thing this codebase refuses.
+
+## Increment 17 — autonomous inside the workspace, permissioned beyond it
+
+| # | What | State |
+|--:|------|-------|
+| 71 | **Two execution profiles**, resolved project → installation → `default` | ✅ done |
+| 72 | **A workspace boundary** that resolves what it is given | ✅ done |
+| 73 | **A filtered environment**: credentials withheld, the provider's own kept | ✅ done |
+| 74 | **`permissionArgs` per profile**, measured against the real CLIs | ✅ done |
+| 75 | **A kill switch that kills a process tree**, and a cancel that cancels | ✅ done |
+| 76 | **A disclaimer the daemon enforces for every client** | ✅ done |
+| 77 | **A refusal reported, and a failed-and-refused run parked** | ✅ done |
+
+The request was a disclaimer, a good default, and graceful handling when
+something is blocked. Exploration found something more uncomfortable: **most of
+the safety this rested on was declared rather than working.** Cancelling a run
+flipped a database row while the agent ran to completion — and the engine's next
+transition threw, and the scheduler swallowed it, so nothing was written down
+anywhere. `child.kill()` signalled one pid, and a step is almost always
+`bash -c '…'` whose work is a grandchild. Shutdown hard-exited after three
+seconds while a step had half an hour left. `working_dir: /tmp` ran in `/tmp`,
+because `joinPath` lets an absolute part restart the path. A client-supplied
+`task.directory` became the agent's own directory. And the runner spawned every
+child with `{ ...process.env }`, so every coding agent inherited the daemon's
+cloud keys, registry tokens and SSH agent socket.
+
+So the boundary and the containment were made real first, and only then
+labelled. A `Default` profile announced on top of that list would have been the
+one thing the standard forbids: implying stronger isolation than the
+implementation provides.
+
+**The flags were measured, not read.** Two configurations that read correctly in
+`--help` did nothing useful: `--tools default` did not name Claude Code's
+code-running tools back in (the session had no Bash at all), and
+`--permission-mode dontAsk` means "do not ask, and deny". What ships was
+observed by running it — a write inside the workspace OK, a shell command OK, a
+write outside refused, shell redirection outside refused, and no hang. Codex is
+not installed here, so its profile claims nothing at all and doctor says so.
+
+Three discoveries changed the design:
+
+- **A task's artifacts are not in its workspace.** `artifactsRoot` is under the
+  project so an artifact outlives its worktree — so a confined agent is told to
+  write outside its own working directory, and Default would have refused every
+  artifact a worktree project ever promised. Hence `directoryFlag`.
+- **"Allow for this project" cannot persist a permission class.** Factory does
+  not mediate the action; the agent's CLI refuses it. The only lever is what
+  Factory passes next time, so a grant is a **directory** — which is also §31 of
+  the standard.
+- **A refused agent does not fail.** `claude -p` exits 0 and reports the refusal
+  in prose. So a denial is always *reported*, and only *parks* a run that also
+  failed: parking one that succeeded would interrupt work that may be done, and
+  not interrupting is the point of the profile.
+
+**Three API changes**, recorded because this API is the contract a commercial
+edition builds on:
+
+- `POST /api/tasks/:id/actions/queue` and `…/retry` return **409** with the
+  disclaimer until an installation has accepted it. No other action is gated —
+  cancelling must never be.
+- `POST /api/runs/stop` is new and ungated. `POST /api/settings/accept` is new.
+- `GET /api/settings` gains `disclaimer` and `accepted`; `PATCH /api/settings`
+  accepts `security.profile`; `PATCH /api/projects/:id` accepts `profile`
+  (`null` clears it); `GET /api/tasks/:id` runs carry `profile`.
+
+Deferred deliberately, and named in `docs/security/execution-profiles.md`:
+network policy, secrets as resources, database policy, execution limits,
+checkpoints, custom profiles, MCP resources, multi-root workspaces and
+production labelling.
+
+**Not verified in a browser.** This increment's fourteen `task-board.feature`
+scenarios are written and unrun: the browser suite needs `127.0.0.1:7317`, and
+Pro's desktop app holds it whenever it is open. Everything below the browser is
+green, including the profile's own scenarios, but the first-run panel and the
+Full Access marker have been exercised only by the web build and by reading.
+`pnpm test:e2e` with the desktop app quit is the outstanding check.
 
 ## Glossary
 
