@@ -695,6 +695,8 @@ Gherkin lives beside the contract it specifies. This index is the one place to r
 | `apps/web/features/sharing.feature` | Export a bundle, preview an import, resolve a clash |
 | `apps/web/features/task-board.feature` | The board: the project rail, the grouped menu, filters, both views, live updates, a task's ordered plan, renaming, and environments |
 | `packages/core/features/run.feature` | Running a plan: order, failure, deadlines, approval gates |
+| `packages/core/features/execution-profiles.feature` | Which profile applies: project over installation over `default`, and one name for each |
+| `packages/core/features/workspace-boundary.feature` | What counts as inside the workspace, including `..`, a prefix sibling and a real symlink |
 | `factory-pro/…/desktop-capability.feature` | Pro is a plugin: same host, same suite, no core changes |
 | `factory-pro/packages/desktop/features/shell.feature` | The desktop shell: attach or start, the menu bar, what is worth a notification |
 | `packages/store/features/store.feature` | Migrations, transactions, and the guards around both |
