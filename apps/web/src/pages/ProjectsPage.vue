@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { ApiError, api, type Project } from '../api/client.js'
+import { ApiError, api, type ExecutionProfile, type Project } from '../api/client.js'
 import { initials, toneVariable } from '../identity.js'
 import PageHeader from '../components/PageHeader.vue'
 
@@ -74,6 +74,26 @@ async function toggle(
     const result = await api.setProjectSetting(project.id, setting)
     scaffolded.value = result.scaffolded.written
     if (result.scaffolded.error !== undefined) error.value = result.scaffolded.error
+    await load()
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : String(caught)
+  }
+}
+
+/**
+ * Say how much authority this project's runs get.
+ *
+ * The empty string means "hasn't chosen", and is sent as `null` — which the
+ * route reads as clear-it. Choosing `default` is a different thing: it pins the
+ * project against an installation that later switches to Full Access.
+ */
+async function setProfile(project: Project, value: string): Promise<void> {
+  error.value = undefined
+  scaffolded.value = []
+  try {
+    await api.setProjectSetting(project.id, {
+      profile: value === '' ? null : (value as ExecutionProfile),
+    })
     await load()
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : String(caught)
@@ -265,6 +285,26 @@ onMounted(load)
           >
             {{ project.usesEnvironments ? 'No environments' : 'Use environments' }}
           </button>
+          <!-- A select rather than a toggle, because there are three positions
+               and one of them is "hasn't chosen". A button cycling through
+               three is a button nobody can predict, and the third position is
+               the one that matters: a project that states nothing follows the
+               installation, so changing that setting changes it. -->
+          <select
+            :data-testid="`profile-${project.name}`"
+            class="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+            :class="
+              project.profile === 'full-access'
+                ? 'border-[var(--color-warn)]/60 text-[var(--color-warn)]'
+                : 'text-[var(--color-ink-muted)]'
+            "
+            :value="project.profile ?? ''"
+            @change="setProfile(project, ($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">Follows installation</option>
+            <option value="default">Default</option>
+            <option value="full-access">Full Access</option>
+          </select>
           <button
             type="button"
             :data-testid="`remove-${project.name}`"

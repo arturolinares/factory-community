@@ -1,0 +1,30 @@
+# Factory's documentation
+
+Four things you might want, in the order most people want them.
+
+| | |
+|---|---|
+| [`quickstart.md`](quickstart.md) | Build it, start it, run the built-in workflow. Fifteen minutes. |
+| [`workflows.md`](workflows.md) | Writing a workflow: phases, steps, agents, artifacts, approval gates. |
+| [`plugins.md`](plugins.md) | Adding a capability — a step kind, a provider, a button on a task, a doctor rule. |
+| [`security/`](security/) | What an agent may reach, and what it may not. |
+
+## Security
+
+Start with [`security/default-profile.md`](security/default-profile.md). It is
+the profile every project gets, and it is short.
+
+| | |
+|---|---|
+| [`default-profile.md`](security/default-profile.md) | What an agent may do without asking, and what it may not |
+| [`full-access.md`](security/full-access.md) | What turning the boundary off means, and how you are reminded |
+| [`workspace-boundary.md`](security/workspace-boundary.md) | What counts as inside — and what is not enforced |
+| [`providers.md`](security/providers.md) | Per agent CLI: what it confines, what Factory adds, what has been measured |
+| [`execution-profiles.md`](security/execution-profiles.md) | The standard this is being built against. A target, not a description |
+
+## Elsewhere
+
+[`../PROJECT.md`](../PROJECT.md) is the source of truth for what has been built,
+in what order, and every decision that shaped it — including the binding rules
+the architecture is held to and an index of every `.feature` file, which is
+where the specification actually lives.

@@ -2,6 +2,7 @@
 import { onMounted } from 'vue'
 import PageHeader from '../components/PageHeader.vue'
 import { SCALES, useSettings } from '../stores/settings.js'
+import type { ExecutionProfile } from '../api/client.js'
 
 /**
  * Preferences, kept in a file Factory owns.
@@ -11,6 +12,18 @@ import { SCALES, useSettings } from '../stores/settings.js'
  * and is therefore per-repository rather than per-person.
  */
 const settings = useSettings()
+
+/**
+ * The two profiles, with the names a person reads.
+ *
+ * Spelled here rather than derived from the served settings, because the board
+ * has to offer a choice the daemon has not been told about yet — and a third
+ * profile would be a deliberate change to this list, not a silent one.
+ */
+const PROFILES: readonly { value: ExecutionProfile; label: string }[] = [
+  { value: 'default', label: 'Default' },
+  { value: 'full-access', label: 'Full Access' },
+]
 
 onMounted(() => {
   if (settings.settings === undefined) void settings.load()
@@ -58,6 +71,83 @@ onMounted(() => {
         Scales everything, the way ⌘+ does. Saved for this installation, so the
         app and a browser agree.
       </p>
+    </section>
+
+    <!-- Above the file path and below appearance: it is the setting with
+         consequences, and the reading order should say so. -->
+    <section data-testid="execution-profile">
+      <h2 class="mb-3 font-mono text-[11px] tracking-widest text-[var(--color-ink-faint)] uppercase">
+        What agents may reach
+      </h2>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          v-for="option in PROFILES"
+          :key="option.value"
+          type="button"
+          class="rounded-md border px-3 py-1.5 text-sm"
+          :class="
+            settings.profile === option.value
+              ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-ink)]'
+              : 'border-[var(--color-line-strong)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]'
+          "
+          :data-testid="`profile-${option.value}`"
+          @click="settings.setProfile(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+      <p class="mt-2 text-xs text-[var(--color-ink-faint)]">
+        What a project gets when it has not chosen for itself. A project can
+        override this on the Projects page.
+      </p>
+      <!-- Warned about here as well as marked in the shell. Choosing it and
+           seeing nothing said would be the wrong kind of quiet. -->
+      <p
+        v-if="settings.unconfined"
+        class="mt-3 rounded-lg border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/5 px-4 py-3 text-xs leading-relaxed text-[var(--color-ink)]"
+        data-testid="full-access-warning"
+      >
+        Full Access removes the workspace boundary and passes every credential
+        through to the agent. Use it where you can restore the machine.
+      </p>
+    </section>
+
+    <section data-testid="disclaimer-state">
+      <h2 class="mb-2 font-mono text-[11px] tracking-widest text-[var(--color-ink-faint)] uppercase">
+        What you agreed to
+      </h2>
+      <p v-if="settings.accepted === true" class="text-xs text-[var(--color-ink-muted)]">
+        Accepted, version {{ settings.settings?.security?.acceptedVersion }}.
+        <span class="text-[var(--color-ink-faint)]">
+          Factory will ask again only if what an agent may reach changes.
+        </span>
+      </p>
+      <p v-else-if="settings.accepted === false" class="text-xs text-[var(--color-ink-muted)]">
+        Not yet accepted. No run will start until it is.
+      </p>
+      <details v-if="settings.disclaimer" class="mt-3">
+        <summary
+          class="cursor-pointer text-xs text-[var(--color-ink-faint)] underline"
+          data-testid="read-disclaimer"
+        >
+          Read it
+        </summary>
+        <p class="mt-3 text-xs leading-relaxed text-[var(--color-ink)]">
+          {{ settings.disclaimer.summary }}
+        </p>
+        <ul class="mt-2 space-y-1">
+          <li
+            v-for="point in settings.disclaimer.points"
+            :key="point"
+            class="text-[11px] leading-relaxed text-[var(--color-ink-muted)]"
+          >
+            · {{ point }}
+          </li>
+        </ul>
+        <p class="mt-2 text-[11px] leading-relaxed text-[var(--color-ink-faint)]">
+          {{ settings.disclaimer.caveat }}
+        </p>
+      </details>
     </section>
 
     <section v-if="settings.file" data-testid="settings-file">

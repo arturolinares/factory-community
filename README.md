@@ -183,6 +183,27 @@ there. Rules are a capability, so a plugin adds its own.
 | `factory-daemon` | HTTP on `127.0.0.1:7317`, including a live event stream |
 | the board | Tasks, runs, logs, evidence, and the builder, at the same address |
 
+## Security
+
+Factory coordinates autonomous coding agents that modify files and execute
+development commands. The **Default** profile gives an agent broad authority
+inside the active project's workspace — read, write, delete, run the tests,
+install the dependencies, commit — while confining it to that workspace,
+withholding credentials from its environment, and requiring permission for
+anything outside. **Full Access** removes those boundaries, is never the
+default, is chosen per project, and is marked on screen the whole time it is on.
+
+Factory is not a sandbox, and says so: it constrains what it launches and what
+that process can see, and an agent running arbitrary shell commands is not fully
+containable by either. [`docs/security/`](docs/security/) sets out what is
+enforced, what is not, and — per agent CLI — which of it has actually been
+measured rather than read off a help page.
+
+```bash
+factory accept --show    # exactly what you are agreeing to
+factory stop --all       # stop every agent, and cancel its task
+```
+
 ## Licence
 
 Apache-2.0. This is the whole product for a developer working alone, and it is meant to stay that

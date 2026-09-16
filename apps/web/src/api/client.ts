@@ -298,6 +298,8 @@ export interface Run {
   startedAt: string
   finishedAt?: string
   detail?: string
+  /** How much authority it was given. Absent for a run from before profiles. */
+  profile?: ExecutionProfile
 }
 
 export interface RunStep {
@@ -374,10 +376,30 @@ export interface ArtifactDetail {
  * disk, else the project's own checkout. The ingredients used to be served on
  * two different routes and no client put them together.
  */
+/** How much authority a run gets. The daemon's own vocabulary. */
+export type ExecutionProfile = 'default' | 'full-access'
+
+/**
+ * What a person is shown before Factory runs an agent for them.
+ *
+ * Declared here rather than imported from core: the board talks HTTP, and this
+ * is the shape the daemon sends. The wording itself is core's, served with the
+ * settings, so there is one text and the board cannot drift from what somebody
+ * actually agreed to.
+ */
+export interface Disclaimer {
+  version: number
+  title: string
+  summary: string
+  points: string[]
+  caveat: string
+}
+
 /** What the person using Factory has chosen. Served by the daemon. */
 export interface FactorySettings {
   ui: { scale: number }
   plugins: { disabled: string[] }
+  security: { acceptedVersion?: number; profile: ExecutionProfile }
 }
 
 /** One plugin Factory knows about, whether or not it is loaded. */
@@ -477,6 +499,15 @@ export interface Project {
   usesWorktrees: boolean
   /** Whether each task gets an environment of its own. Off unless asked for. */
   usesEnvironments: boolean
+  /**
+   * How much authority its runs get. Absent means it follows the installation.
+   *
+   * Absent is not the same as `default`: a project that has never chosen
+   * follows the installation's setting, so changing that setting changes it.
+   */
+  profile?: ExecutionProfile
+  /** Directories its agents may reach beyond the workspace, granted for good. */
+  grantedDirectories: string[]
   createdAt: string
   /** How many tasks are pointed at it. */
   tasks: number
@@ -700,7 +731,16 @@ export const api = {
   projects: () => request<{ items: Project[] }>('/api/projects'),
 
   /** Turn either project setting on or off. Both go through the same route. */
-  setProjectSetting: (id: string, setting: { usesWorktrees?: boolean; usesEnvironments?: boolean }) =>
+  setProjectSetting: (
+    id: string,
+    // `profile: null` clears it, which is how a project returns to following
+    // the installation. Distinct from choosing `default`.
+    setting: {
+      usesWorktrees?: boolean
+      usesEnvironments?: boolean
+      profile?: ExecutionProfile | null
+    },
+  ) =>
     request<{ project: Project; scaffolded: ScaffoldReport }>(
       `/api/projects/${encodeURIComponent(id)}`,
       { method: 'PATCH', body: JSON.stringify(setting) },
@@ -768,12 +808,38 @@ export const api = {
     ),
 
   settings: () =>
-    request<{ settings: FactorySettings; file?: string }>('/api/settings'),
+    request<{
+      settings: FactorySettings
+      file?: string
+      disclaimer: Disclaimer
+      accepted: boolean
+    }>('/api/settings'),
 
-  saveSettings: (patch: { ui?: { scale?: number } }) =>
+  saveSettings: (patch: {
+    ui?: { scale?: number }
+    security?: { profile?: ExecutionProfile }
+  }) =>
     request<{ settings: FactorySettings; file?: string }>('/api/settings', {
       method: 'PATCH',
       body: JSON.stringify(patch),
+    }),
+
+  /**
+   * Record that the disclaimer has been read.
+   *
+   * No body: the version recorded is the daemon's, so that a board showing an
+   * older copy cannot accept on behalf of a newer one.
+   */
+  acceptDisclaimer: () =>
+    request<{ settings: FactorySettings; accepted: boolean; version: number }>(
+      '/api/settings/accept',
+      { method: 'POST' },
+    ),
+
+  /** Stop every agent Factory started. */
+  stopEverything: () =>
+    request<{ stopped: string[]; signalled: number; killed: number }>('/api/runs/stop', {
+      method: 'POST',
     }),
 
   artifact: (taskId: string, name: string) =>

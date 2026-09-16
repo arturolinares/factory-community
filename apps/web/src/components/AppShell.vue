@@ -2,8 +2,11 @@
 import { RouterLink, useRoute } from 'vue-router'
 import { computed } from 'vue'
 import ProjectRail from './ProjectRail.vue'
+import DisclaimerPanel from './DisclaimerPanel.vue'
+import { useSettings } from '../stores/settings.js'
 
 const route = useRoute()
+const settings = useSettings()
 
 /**
  * Grouped by what each page is about, not by how often it is used.
@@ -53,6 +56,10 @@ const current = computed(() => route.path)
        and put the tagline below at the bottom of the *page* rather than the
        window. The editor pages already did it this way and never had the bug. -->
   <div class="app-viewport flex">
+    <!-- Over everything, and only when the daemon says nothing has been
+         accepted. Browsing is not gated; starting a run is. -->
+    <DisclaimerPanel />
+
     <ProjectRail />
 
     <nav
@@ -61,6 +68,26 @@ const current = computed(() => route.path)
       <div class="flex items-center gap-2 px-5 py-5">
         <span class="h-2.5 w-2.5 rotate-45 rounded-[2px] bg-[var(--color-accent)]" />
         <span class="font-mono text-[13px] font-medium tracking-[0.18em] uppercase">Factory</span>
+      </div>
+
+      <!-- Here rather than in a banner or a page header, for two reasons. The
+           shell is a flex *row* with no header slot, and wrapping it to add one
+           would change what `@container (max-width: 900px)` measures — the
+           container query is on `.app-viewport`, and the interface scale depends
+           on it. And the nav survives that collapse: only `.app-rail` is hidden,
+           the nav narrows to `w-40` and stays. So this is visible at every
+           scale, which is the whole requirement. -->
+      <div
+        v-if="settings.unconfined"
+        class="mx-3 mb-1 rounded-md border border-[var(--color-warn)]/50 bg-[var(--color-warn)]/10 px-3 py-2"
+        data-testid="full-access-badge"
+      >
+        <p class="font-mono text-[10px] leading-tight tracking-widest text-[var(--color-warn)] uppercase">
+          Full Access
+        </p>
+        <p class="mt-0.5 text-[10px] leading-tight text-[var(--color-ink-muted)]">
+          Agents are not confined to the workspace.
+        </p>
       </div>
 
       <div v-for="(section, index) in nav" :key="section.heading ?? index" class="px-2">

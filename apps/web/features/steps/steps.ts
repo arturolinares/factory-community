@@ -1522,8 +1522,14 @@ Then('the row does not offer {string}', async ({ page }, _label: string) => {
 })
 
 When('I set the interface size to {int}', async ({ page }, scale: number) => {
-  // Through the store the settings page drives, so this exercises the same
-  // code path a click does rather than styling the document by hand.
+  // Deliberately *not* through the settings page: these scenarios are about
+  // what the shell does at a given scale, and they are already standing on the
+  // task page when they ask. Navigating away and back would test the router.
+  //
+  // The comment here used to claim it went "through the store the settings page
+  // drives", which it never did — it writes the setting and then applies the
+  // same two properties the store applies. `the interface scale becomes {int}`
+  // below is the one that drives the real control.
   await page.evaluate(async (value) => {
     await fetch('/api/settings', {
       method: 'PATCH',
@@ -1565,4 +1571,83 @@ Then('the project rail is shown', async ({ page }) => {
 
 Then('the menu is still there', async ({ page }) => {
   await expect(page.getByTestId('nav-tasks')).toBeVisible()
+})
+
+
+// ---------------------------------------------------------------- security
+
+Given('nothing has been accepted on this installation', async ({ world }) => {
+  // The scopes already exist — the feature's own Background made them — and the
+  // daemon has not started yet, because that happens when a page is opened. So
+  // removing the file is enough, and is what a first run actually looks like.
+  world.freshInstallation = true
+  rmSync(join(world.userScope, 'settings.json'), { force: true })
+})
+
+Given('the installation runs under Full Access', async ({ world }) => {
+  world.unconfined = true
+  world.write(
+    join(world.userScope, 'settings.json'),
+    JSON.stringify({ security: { acceptedVersion: 1, profile: 'full-access' } }),
+  )
+})
+
+When('I queue it', async ({ page }) => {
+  await page.getByTestId('action-queue').click()
+})
+
+When('I accept the disclaimer', async ({ page }) => {
+  await page.getByTestId('accept-disclaimer').click()
+})
+
+When('the interface scale becomes {int}', async ({ page }, scale: number) => {
+  // Through the control a person clicks, which is what the settings page had
+  // no coverage of at all. Back afterwards, so the scenario can carry on
+  // looking at the board.
+  const wasAt = page.url()
+  await page.getByTestId('nav-settings').click()
+  await page.getByTestId(`scale-${scale}`).click()
+  await page.goto(wasAt)
+})
+
+Then('no disclaimer is in the way', async ({ page }) => {
+  await expect(page.getByTestId('disclaimer')).toHaveCount(0)
+})
+
+Then('the disclaimer appears', async ({ page }) => {
+  await expect(page.getByTestId('disclaimer')).toBeVisible()
+})
+
+Then('the disclaimer is gone', async ({ page }) => {
+  await expect(page.getByTestId('disclaimer')).toHaveCount(0)
+})
+
+Then('it says what an agent can do inside the workspace', async ({ page }) => {
+  await expect(page.getByTestId('disclaimer-summary')).toContainText('inside the workspace')
+})
+
+Then('it names the profile that removes the boundaries', async ({ page }) => {
+  await expect(page.getByTestId('disclaimer-points')).toContainText('Full Access')
+})
+
+Then('it says plainly that Factory is not a sandbox', async ({ page }) => {
+  await expect(page.getByTestId('disclaimer-caveat')).toContainText('not a sandbox')
+})
+
+Then('the Full Access marker is visible', async ({ page }) => {
+  await expect(page.getByTestId('full-access-badge')).toBeVisible()
+})
+
+Then('it is still visible on the settings page', async ({ page }) => {
+  await page.getByTestId('nav-settings').click()
+  await expect(page.getByTestId('full-access-badge')).toBeVisible()
+})
+
+Then('{string} leaves {string}', async ({ page }, name: string, state: string) => {
+  // Queued, running or already done — anything but where it started. The point
+  // is that the work was allowed to begin, not how far it got.
+  await page.getByTestId('nav-tasks').click()
+  await expect(
+    page.getByTestId(`task-row-${name}`).getByTestId(`state-${state}`),
+  ).toHaveCount(0, { timeout: 10_000 })
 })

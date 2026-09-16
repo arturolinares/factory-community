@@ -506,6 +506,15 @@ export class Engine {
       rule: 'run.permissionRefused',
     }))
     for (const denial of result.denials) {
+      // Written into the run's log as well as reported, because a warning in
+      // an outcome reaches nothing that persists: the board reads the database.
+      // Against the run rather than a step — `run_logs.step_id` is nullable for
+      // exactly this, "output the run produced outside any step".
+      this.#runs.append({
+        runId: run.id,
+        stream: 'stderr',
+        text: `${denialMessage(denial)}\n`,
+      })
       this.#events?.emit('permission.requested', {
         runId: run.id,
         taskId: task.id,

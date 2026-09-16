@@ -43,6 +43,16 @@ export class World {
   #daemon: ChildProcess | undefined
   excludeBuiltin = false
   /**
+   * Start with nothing accepted, the way a real first run does.
+   *
+   * Opt-in rather than the default, because every scenario that runs a workflow
+   * needs an installation where somebody said yes — and the daemon reads its
+   * settings once, at start, so this has to be decided before it launches.
+   */
+  freshInstallation = false
+  /** Start with the installation profile set to Full Access. */
+  unconfined = false
+  /**
    * Whether spawned steps can find a shell.
    *
    * PATH is empty by default so provider availability does not depend on the
@@ -79,6 +89,21 @@ export class World {
     mkdirSync(join(this.workDir, 'src'), { recursive: true })
     this.write(join(this.projectScope, 'config.yaml'), 'kind: factory.scope/v1\nscope: project\n')
     this.write(join(this.userScope, 'config.yaml'), 'kind: factory.scope/v1\nscope: user\n')
+    // The disclaimer, accepted unless a scenario says otherwise. The daemon
+    // refuses to queue a run until it is, for every client, so an installation
+    // where nobody has agreed cannot run a workflow — which is most of what
+    // this suite is about. `freshInstallation` is the opt-out.
+    if (!this.freshInstallation) {
+      this.write(
+        join(this.userScope, 'settings.json'),
+        JSON.stringify({
+          security: {
+            acceptedVersion: 1,
+            ...(this.unconfined ? { profile: 'full-access' } : {}),
+          },
+        }),
+      )
+    }
   }
 
   createOtherScope(): void {

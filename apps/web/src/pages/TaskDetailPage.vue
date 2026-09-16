@@ -13,6 +13,7 @@ import {
   type WorkflowChoice,
 } from '../api/client.js'
 import { live, type LiveConnection } from '../api/live.js'
+import { useSettings } from '../stores/settings.js'
 import PageHeader from '../components/PageHeader.vue'
 import TaskStateBadge from '../components/TaskStateBadge.vue'
 import TaskActions from '../components/TaskActions.vue'
@@ -29,10 +30,15 @@ import { useClipboard } from '../composables/useClipboard.js'
  */
 const route = useRoute()
 const router = useRouter()
+const settings = useSettings()
 const detail = ref<TaskDetail | undefined>(undefined)
 const steps = ref<RunStep[]>([])
 const evidence = ref<Evidence[]>([])
 const openRun = ref<string | undefined>(undefined)
+/** The run the page is showing, so its own detail and profile can be read. */
+const openedRun = computed(() =>
+  detail.value?.runs.find((run) => run.id === openRun.value),
+)
 const openStep = ref<number | undefined>(undefined)
 const log = ref<LogView | undefined>(undefined)
 const error = ref<string | undefined>(undefined)
@@ -217,10 +223,29 @@ async function act(action: string): Promise<void> {
     await api.actOnTask(id.value, action)
     await load()
   } catch (caught) {
+    // A 409 carrying a disclaimer is the daemon saying nobody has been told
+    // what a run can reach. Turned into the panel rather than into an error
+    // message, so it appears where the button was pressed — which is the point
+    // of gating in the daemon and not only on first load.
+    if (caught instanceof ApiError && caught.status === 409 && hasDisclaimer(caught.body)) {
+      settings.refusedForAcceptance()
+      if (settings.disclaimer === undefined) await settings.load()
+      return
+    }
     error.value = caught instanceof ApiError ? caught.message : String(caught)
   } finally {
     busy.value = false
   }
+}
+
+/** Whether a refusal was this refusal. Narrow on purpose: it gates a modal. */
+function hasDisclaimer(body: unknown): boolean {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    'disclaimer' in body &&
+    typeof (body as { disclaimer?: unknown }).disclaimer === 'object'
+  )
 }
 
 /** What this task's project can run, which is not what the installation can. */
@@ -673,8 +698,28 @@ const stepTone: Record<string, string> = {
             <span class="font-mono">{{ run.workflow }}</span>
             <span class="ml-1.5 text-[var(--color-ink-faint)]">#{{ run.attempt }}</span>
             <span class="ml-1.5">{{ run.state }}</span>
+            <!-- What authority it had. Recorded per run, so a run that happened
+                 under Full Access still says so after the project moved on. -->
+            <span
+              v-if="run.profile === 'full-access'"
+              class="ml-1.5 font-mono text-[10px] tracking-wider text-[var(--color-warn)] uppercase"
+              :data-testid="`run-profile-${run.workflow}-${run.attempt}`"
+            >
+              full access
+            </span>
           </button>
         </div>
+
+        <!-- The run's own last word, which the page has never shown. It is
+             where the reason for a pause lives — including "the agent was
+             refused this path" — and the alternative was reading the log. -->
+        <p
+          v-if="openedRun?.detail"
+          class="mt-2 rounded-lg border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/5 px-4 py-3 text-xs leading-relaxed text-[var(--color-ink)]"
+          data-testid="run-detail"
+        >
+          {{ openedRun.detail }}
+        </p>
       </section>
 
       <section v-if="openRun">

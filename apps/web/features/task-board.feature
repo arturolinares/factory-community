@@ -680,3 +680,58 @@ Feature: The task board
       When I set the interface size to 3
       And I set the interface size to 1
       Then the project rail is shown
+
+  Rule: nobody starts an agent without being told what one can reach
+
+    Factory coordinates other people's coding agents against real repositories.
+    Until this increment it did that with no boundary of its own and said
+    nothing about it, so the first way anybody found out was by reading the
+    source.
+
+    The daemon is the gate — the CLI and `curl` start runs too — and the board's
+    job is to turn its refusal into something a person can act on, wherever they
+    pressed the button.
+
+    Background:
+      Given nothing has been accepted on this installation
+
+    Scenario: Browsing costs nothing
+      When I open the tasks page
+      # Reading is not running. Gating the whole app would be the wrong shape:
+      # the thing that needs agreement is starting an agent.
+      Then the board says there is nothing yet
+      And no disclaimer is in the way
+
+    Scenario: Queueing shows what an agent can reach
+      When I open the tasks page
+      And I create the task "Add due dates" on "hello"
+      And I queue it
+      Then the disclaimer appears
+      And it says what an agent can do inside the workspace
+      And it names the profile that removes the boundaries
+      And it says plainly that Factory is not a sandbox
+
+    Scenario: Accepting it lets the work start
+      When I open the tasks page
+      And I create the task "Add due dates" on "hello"
+      And I queue it
+      And I accept the disclaimer
+      Then the disclaimer is gone
+      And "Add due dates" leaves "draft"
+
+  Rule: Full Access is impossible to miss
+
+    Background:
+      Given the installation runs under Full Access
+
+    Scenario: The marker is in the shell, on every page
+      When I open the tasks page
+      Then the Full Access marker is visible
+      And it is still visible on the settings page
+
+    Scenario: The marker survives the largest interface scale
+      When I open the tasks page
+      And the interface scale becomes 3
+      # The rails give up their room at that scale; the nav narrows and stays,
+      # which is why the marker lives there and not in a banner.
+      Then the Full Access marker is visible
