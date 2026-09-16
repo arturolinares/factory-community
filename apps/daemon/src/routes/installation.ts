@@ -1,5 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import { MAX_UI_SCALE } from '@factory/config'
+import {
+  DISCLAIMER,
+  DISCLAIMER_VERSION,
+  EXECUTION_PROFILES,
+  hasAccepted,
+  isExecutionProfile,
+} from '@factory/core'
 import type { Runtime } from '@factory/runtime'
 
 /**
@@ -108,7 +115,36 @@ export function registerInstallationRoutes(app: FastifyInstance, runtime: Runtim
     settings: runtime.settings.current(),
     file: runtime.settings.file,
     problems: runtime.settings.problems,
+    /**
+     * Served with the settings rather than on a route of its own.
+     *
+     * The board needs both together to decide anything: whether to show the
+     * first-run panel is `accepted`, and what to put in it is `disclaimer`. Two
+     * routes would mean two requests that can disagree for a moment, and the
+     * moment they disagree is the one where somebody starts a run.
+     */
+    disclaimer: DISCLAIMER,
+    accepted: hasAccepted(runtime.settings.current().security.acceptedVersion),
   }))
+
+  /**
+   * Record that somebody has read what an agent run can reach.
+   *
+   * Its own route rather than a key in `PATCH /api/settings`, for the reason
+   * `POST /api/plugins/:id` has one: the version stored is **Factory's**, not
+   * the client's. A client that could send the number could accept a disclaimer
+   * it had not been shown — including a future one — which is the only thing
+   * this record is for.
+   */
+  app.post('/api/settings/accept', async (_request, reply) => {
+    const saved = runtime.settings.update({
+      security: { acceptedVersion: DISCLAIMER_VERSION },
+    })
+    if (saved.problems.length > 0) {
+      return reply.code(500).send({ error: saved.problems[0]?.message, problems: saved.problems })
+    }
+    return { settings: saved.settings, accepted: true, version: DISCLAIMER_VERSION }
+  })
 
   /**
    * Change a preference.
@@ -117,23 +153,38 @@ export function registerInstallationRoutes(app: FastifyInstance, runtime: Runtim
    * are checked before the file is touched so a refusal reads as a refusal
    * rather than as a save that quietly did nothing.
    */
-  app.patch<{ Body: { ui?: { scale?: unknown } } }>(
+  app.patch<{ Body: { ui?: { scale?: unknown }; security?: { profile?: unknown } } }>(
     '/api/settings',
     async (request, reply) => {
       const scale = request.body?.ui?.scale
-      if (scale === undefined) {
-        return reply.code(400).send({ error: 'Send { ui: { scale } }.' })
-      }
-      if (typeof scale !== 'number' || !Number.isFinite(scale)) {
-        return reply.code(400).send({ error: 'scale is a number.' })
-      }
-      if (scale < 1 || scale > MAX_UI_SCALE) {
+      const profile = request.body?.security?.profile
+      if (scale === undefined && profile === undefined) {
         return reply
           .code(400)
-          .send({ error: `scale is between 1 and ${MAX_UI_SCALE}.` })
+          .send({ error: 'Send { ui: { scale } } or { security: { profile } }.' })
+      }
+      if (scale !== undefined) {
+        if (typeof scale !== 'number' || !Number.isFinite(scale)) {
+          return reply.code(400).send({ error: 'scale is a number.' })
+        }
+        if (scale < 1 || scale > MAX_UI_SCALE) {
+          return reply
+            .code(400)
+            .send({ error: `scale is between 1 and ${MAX_UI_SCALE}.` })
+        }
+      }
+      if (profile !== undefined && !isExecutionProfile(profile)) {
+        return reply
+          .code(400)
+          .send({ error: `profile is one of ${EXECUTION_PROFILES.join(', ')}.` })
       }
 
-      const saved = runtime.settings.update({ ui: { scale } })
+      // One update, so a patch carrying both cannot half-apply — and so the
+      // read-back through the schema happens once.
+      const saved = runtime.settings.update({
+        ...(scale === undefined ? {} : { ui: { scale } }),
+        ...(profile === undefined ? {} : { security: { profile } }),
+      })
       if (saved.problems.length > 0) {
         return reply.code(500).send({ error: saved.problems[0]?.message, problems: saved.problems })
       }

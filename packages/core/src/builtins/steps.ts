@@ -181,7 +181,13 @@ export const agentStepKind: StepKindCapability = defineStepKind({
       // worktree that produced it. A confined agent told to write there needs
       // to be given the directory, or the first thing the Default profile does
       // is refuse the document it just asked for.
-      allowedDirectories: [artifactsRootFor(context)],
+      // The artifacts root first, because it is the one this kind knows it
+      // needs; then whatever the project granted. De-duplicated, so a project
+      // that granted its own artifacts directory does not produce the flag
+      // twice.
+      allowedDirectories: [
+        ...new Set([artifactsRootFor(context), ...(context.allowedDirectories ?? [])]),
+      ],
     }
     const rendered = chosen.provider.render(request)
 

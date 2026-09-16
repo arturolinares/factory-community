@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FastifyInstance } from 'fastify'
-import { parseWorkflowFile } from '@factory/core'
+import { DISCLAIMER_VERSION, parseWorkflowFile } from '@factory/core'
 import { createRuntime } from '@factory/runtime'
 import { resolveScopes } from '@factory/config'
 import { buildServer } from '../src/server.js'
@@ -613,6 +613,136 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
     RuleScenario('A patch naming nothing is refused', ({ When, Then }) => {
       When('I patch the settings with nothing', () => call('PATCH', '/api/settings', {}))
       Then('the response is 400', () => expect(response.statusCode).toBe(400))
+    })
+  })
+
+  Rule('the disclaimer is recorded once, and the profile is a setting', ({ RuleScenario }) => {
+    const settings = (): Record<string, Record<string, unknown>> =>
+      (response.body as { settings?: Record<string, Record<string, unknown>> }).settings ?? {}
+    const askSettings = async (): Promise<void> => {
+      await call('GET', '/api/settings')
+    }
+    const accept = async (): Promise<void> => {
+      await call('POST', '/api/settings/accept')
+    }
+    const setProfile = (profile: unknown) => async (): Promise<void> => {
+      await call('PATCH', '/api/settings', { security: { profile } })
+    }
+    const setScale = (scale: number) => async (): Promise<void> => {
+      await call('PATCH', '/api/settings', { ui: { scale } })
+    }
+    const notAccepted = (): void => {
+      expect((response.body as { accepted?: boolean }).accepted).toBe(false)
+    }
+    const profileIs = (expected: string) => async (): Promise<void> => {
+      await askSettings()
+      expect(settings().security?.profile).toBe(expected)
+    }
+
+    RuleScenario('A fresh installation has accepted nothing', ({ When, Then, And }) => {
+      When('I ask for the settings', askSettings)
+      Then('it says nothing has been accepted', notAccepted)
+      And('it carries the disclaimer to show', () => {
+        const disclaimer = (response.body as { disclaimer?: { summary?: string } }).disclaimer
+        expect(disclaimer?.summary).toContain('inside the workspace')
+      })
+      And('the disclaimer says which profile removes the boundaries', () => {
+        const disclaimer = (response.body as { disclaimer?: { points?: string[] } }).disclaimer
+        expect(disclaimer?.points?.join(' ')).toContain('Full Access')
+      })
+    })
+
+    RuleScenario('Accepting it is recorded', ({ When, Then, And }) => {
+      When('I accept the disclaimer', accept)
+      Then('the response says it is accepted', () =>
+        expect((response.body as { accepted?: boolean }).accepted).toBe(true),
+      )
+      And('the settings say it is accepted', async () => {
+        await askSettings()
+        expect((response.body as { accepted?: boolean }).accepted).toBe(true)
+      })
+      And('the file records the current version', () => {
+        const saved = savedSettings() as { security?: { acceptedVersion?: number } }
+        expect(saved.security?.acceptedVersion).toBe(DISCLAIMER_VERSION)
+      })
+    })
+
+    RuleScenario('Accepting it twice is not an error', ({ Given, When, Then }) => {
+      Given('the disclaimer has been accepted', accept)
+      When('I accept the disclaimer', accept)
+      Then('the response says it is accepted', () =>
+        expect((response.body as { accepted?: boolean }).accepted).toBe(true),
+      )
+    })
+
+    RuleScenario('An older acceptance is not enough', ({ Given, When, Then }) => {
+      Given('the settings file records an acceptance of version 0', () => {
+        writeFileSync(settingsFile(), JSON.stringify({ security: { acceptedVersion: 0 } }))
+      })
+      When('I ask for the settings', askSettings)
+      Then('it says nothing has been accepted', notAccepted)
+    })
+
+    RuleScenario('The default profile for new projects can be changed', ({ When, Then }) => {
+      When('I set the installation profile to "full-access"', setProfile('full-access'))
+      Then(
+        'the settings say the installation profile is "full-access"',
+        profileIs('full-access'),
+      )
+    })
+
+    RuleScenario('A profile that is not one is refused', ({ When, Then, And }) => {
+      When('I set the installation profile to "sort-of-safe"', setProfile('sort-of-safe'))
+      Then('the response is 400', () => expect(response.statusCode).toBe(400))
+      And('the response names the profiles', () =>
+        expect(String((response.body as { error?: string }).error)).toContain('full-access'),
+      )
+    })
+
+    RuleScenario('Changing the profile leaves the other settings alone', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the interface scale is 2', setScale(2))
+      And('a plugin is switched off', switchTo('@factory/task-diffity', false))
+      When('I set the installation profile to "full-access"', setProfile('full-access'))
+      Then(
+        'the settings say the installation profile is "full-access"',
+        profileIs('full-access'),
+      )
+      And('the interface scale is still 2', () => {
+        expect((settings().ui as { scale?: number }).scale).toBe(2)
+      })
+      And('the plugin is still switched off', () => {
+        expect((settings().plugins as { disabled?: string[] }).disabled).toContain(
+          '@factory/task-diffity',
+        )
+      })
+    })
+
+    RuleScenario('Changing the scale leaves the profile alone', ({ Given, When, Then, And }) => {
+      Given('the installation profile is "full-access"', setProfile('full-access'))
+      When('I set the interface scale to 2', setScale(2))
+      Then('the interface scale is 2', async () => {
+        await askSettings()
+        expect((settings().ui as { scale?: number }).scale).toBe(2)
+      })
+      And(
+        'the settings say the installation profile is "full-access"',
+        profileIs('full-access'),
+      )
+    })
+
+    RuleScenario('A patch with nothing in it says what it takes', ({ When, Then, And }) => {
+      When('I send an empty settings patch', async () => {
+        await call('PATCH', '/api/settings', {})
+      })
+      Then('the response is 400', () => expect(response.statusCode).toBe(400))
+      And('the response mentions the profile', () =>
+        expect(String((response.body as { error?: string }).error)).toContain('profile'),
+      )
     })
   })
 })

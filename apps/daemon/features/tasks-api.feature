@@ -685,3 +685,73 @@ Feature: Tasks, runs and live updates over HTTP
       When I create the task "Add due dates" asking for the directory "/etc/passwd"
       Then the task's directory is "etc-passwd"
       And the task's directory is a single path segment
+
+  Rule: no run starts until somebody has been told what a run can reach
+
+    The gate is in the daemon, not the browser, because the browser is not the
+    only client: the CLI and `curl` start runs too, and a disclaimer only the
+    web app enforces is advice rather than a gate.
+
+    On `queue` and `retry` alone — the two actions that lead to an agent
+    running. Cancelling or approving something already under way must never be
+    blocked by it, because that would trap the person who most needs to stop
+    what is happening.
+
+    Scenario: Queueing before the disclaimer is accepted is refused
+      Given nothing has been accepted on this installation
+      And the task "Add due dates" exists with the workflow "hello"
+      When I queue it
+      Then the response is 409
+      And the response carries the disclaimer to show
+
+    Scenario: Queueing after accepting it works
+      Given nothing has been accepted on this installation
+      And the task "Add due dates" exists with the workflow "hello"
+      And the disclaimer is accepted
+      When I queue it
+      Then the response is 200
+
+    Scenario: Cancelling is never gated on the disclaimer
+      Given nothing has been accepted on this installation
+      And the task "Add due dates" exists with the workflow "hello"
+      When I cancel it
+      # The one action a person reaches for when something is going wrong.
+      Then the response is 200
+
+  Rule: everything can be stopped at once
+
+    Scenario: Stopping everything when nothing is running is not an error
+      When I stop everything
+      Then the response is 200
+      And it reports nothing signalled
+
+  Rule: a project says how much authority its runs get
+
+    Scenario: A new project states no profile
+      Given the project "work" exists at the scope's directory
+      When I ask for the projects
+      Then the project states no profile
+
+    Scenario: A project's profile can be set
+      Given the project "work" exists at the scope's directory
+      When I set the project's profile to "full-access"
+      Then the project's profile is "full-access"
+      And nothing was scaffolded
+
+    Scenario: A project's profile can be cleared back to unstated
+      Given the project "work" exists at the scope's directory
+      And the project's profile is "full-access"
+      When I clear the project's profile
+      Then the project states no profile
+
+    Scenario: A profile that is not one is refused
+      Given the project "work" exists at the scope's directory
+      When I set the project's profile to "sort-of-safe"
+      Then the response is 400
+      And the response says what a profile can be
+
+    Scenario: An empty project patch says the profile is an option
+      Given the project "work" exists at the scope's directory
+      When I send an empty project patch
+      Then the response is 400
+      And the response says what a profile can be

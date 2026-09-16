@@ -96,6 +96,15 @@ export interface PlanRequest {
    * symlinks.
    */
   readonly canonical?: Canonicalise
+  /**
+   * Directories outside the workspace this task's agents may reach.
+   *
+   * The project's standing grants — what "allow for this project" left behind.
+   * Threaded to each step's planner, which adds whatever it needs of its own:
+   * the agent kind adds the artifacts root, which lives under the project
+   * rather than the worktree and would otherwise be refused.
+   */
+  readonly allowedDirectories?: readonly string[]
 }
 
 export interface ResolvedStep {
@@ -281,6 +290,9 @@ export function resolvePlan(request: PlanRequest): PlanResult {
         cwd,
         artifacts,
         profile,
+        ...(request.allowedDirectories === undefined
+          ? {}
+          : { allowedDirectories: request.allowedDirectories }),
         ...(lookupAgent === undefined ? {} : { lookupAgent }),
         ...(request.defaultProvider === undefined ? {} : { defaultProvider: request.defaultProvider }),
         ...(request.session === undefined

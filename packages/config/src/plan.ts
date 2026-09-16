@@ -33,6 +33,8 @@ export function planWorkflow(options: {
   profile?: ExecutionProfile
   /** How to resolve a path before comparing it to the workspace. */
   canonical?: Canonicalise
+  /** Directories outside the workspace this task's agents may reach. */
+  allowedDirectories?: readonly string[]
 }): PlanResult {
   const resolved = resolveWorkflow(options.chain, options.workflow)
 
@@ -69,5 +71,8 @@ export function planWorkflow(options: {
     ...(options.session === undefined ? {} : { session: options.session }),
     ...(options.profile === undefined ? {} : { profile: options.profile }),
     ...(options.canonical === undefined ? {} : { canonical: options.canonical }),
+    ...(options.allowedDirectories === undefined
+      ? {}
+      : { allowedDirectories: options.allowedDirectories }),
   })
 }

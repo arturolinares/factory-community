@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import type { FastifyInstance } from 'fastify'
 import { createRuntime, type Runtime } from '@factory/runtime'
 import {
+  DISCLAIMER_VERSION,
   TERMINAL_KIND,
   terminalCommand,
   type PluginContext,
@@ -45,12 +46,23 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
   /** A directory holding a stub `diffity`, added to the daemon's PATH. */
   let toolBin = ''
 
+  /**
+   * Extra installations a scenario built for itself.
+   *
+   * One scenario needs a daemon on which nobody has accepted the disclaimer,
+   * and that cannot be the Background's: `SettingsHolder` reads its file once
+   * and keeps the single live copy, so removing the file behind it changes
+   * nothing.
+   */
+  let roots: string[] = []
+
   AfterEachScenario(async () => {
     await stream?.close()
     stream = undefined
     await app?.close()
     await service?.close()
-    rmSync(root, { recursive: true, force: true })
+    for (const extra of [root, ...roots]) rmSync(extra, { recursive: true, force: true })
+    roots = []
   })
 
   const file = (path: string, contents: string) => {
@@ -90,6 +102,14 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       // The user scope has to exist for settings to be saved into it, which is
       // how a plugin gets switched off.
       file(join(userScope, 'config.yaml'), 'kind: factory.scope/v1\nscope: user\n')
+      // The disclaimer, accepted. Written rather than bypassed: the daemon
+      // refuses to queue a run until it is, for every client, so a scenario
+      // about anything else has to have an installation where somebody said
+      // yes. The scenarios about the refusal itself delete this file first.
+      file(
+        join(userScope, 'settings.json'),
+        JSON.stringify({ security: { acceptedVersion: DISCLAIMER_VERSION } }),
+      )
 
       opened = undefined
       launched = undefined
@@ -1950,6 +1970,162 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       )
       Then('the task\'s directory is "etc-passwd"', directoryIs('etc-passwd'))
       And("the task's directory is a single path segment", oneSegment)
+    })
+  })
+
+  Rule('no run starts until somebody has been told what a run can reach', ({ RuleScenario }) => {
+    /**
+     * A second daemon on an installation where nobody has accepted anything.
+     *
+     * Not the shared one with its settings file deleted: `SettingsHolder` reads
+     * the file once and keeps the single live copy, deliberately, so removing
+     * it behind the daemon's back changes nothing. A fresh installation is the
+     * only honest way to describe a fresh installation.
+     */
+    const nothingAccepted = async (): Promise<void> => {
+      const fresh = mkdtempSync(join(tmpdir(), 'factory-unaccepted-'))
+      const freshScope = join(fresh, 'home', '.xaedalon', '.factory')
+      mkdirSync(join(fresh, 'work', '.git'), { recursive: true })
+      file(join(freshScope, 'config.yaml'), 'kind: factory.scope/v1\nscope: user\n')
+      const env = { FACTORY_HOME: freshScope }
+      const chain = resolveScopes({ cwd: join(fresh, 'work'), env })
+      const freshRuntime = await createRuntime({ cwd: join(fresh, 'work'), env, chain })
+      const freshService = await createService(freshRuntime, { file: join(fresh, 'state.db') })
+      // Replaces the Background's daemon for this scenario. The old one's
+      // teardown still runs, and this one's temporary directory goes with the
+      // scenario's own root.
+      app = buildServer(freshRuntime, freshService, {})
+      service = freshService
+      roots.push(fresh)
+    }
+    const accept = async (): Promise<void> => {
+      await call('POST', '/api/settings/accept')
+    }
+    const withWorkflow = async (): Promise<void> => {
+      await create('Add due dates', ['hello'])
+    }
+    const action = (name: string) => async (): Promise<void> => {
+      await call('POST', `/api/tasks/${taskId}/actions/${name}`)
+    }
+
+    RuleScenario('Queueing before the disclaimer is accepted is refused', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('nothing has been accepted on this installation', nothingAccepted)
+      And('the task "Add due dates" exists with the workflow "hello"', withWorkflow)
+      When('I queue it', action('queue'))
+      Then('the response is 409', () => expect(response.statusCode).toBe(409))
+      And('the response carries the disclaimer to show', () => {
+        const disclaimer = (response.body as { disclaimer?: { summary?: string } }).disclaimer
+        expect(disclaimer?.summary).toContain('inside the workspace')
+      })
+    })
+
+    RuleScenario('Queueing after accepting it works', ({ Given, And, When, Then }) => {
+      Given('nothing has been accepted on this installation', nothingAccepted)
+      And('the task "Add due dates" exists with the workflow "hello"', withWorkflow)
+      And('the disclaimer is accepted', accept)
+      When('I queue it', action('queue'))
+      Then('the response is 200', () => expect(response.statusCode).toBe(200))
+    })
+
+    RuleScenario('Cancelling is never gated on the disclaimer', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('nothing has been accepted on this installation', nothingAccepted)
+      And('the task "Add due dates" exists with the workflow "hello"', withWorkflow)
+      When('I cancel it', action('cancel'))
+      Then('the response is 200', () => expect(response.statusCode).toBe(200))
+    })
+  })
+
+  Rule('everything can be stopped at once', ({ RuleScenario }) => {
+    RuleScenario('Stopping everything when nothing is running is not an error', ({
+      When,
+      Then,
+      And,
+    }) => {
+      When('I stop everything', async () => {
+        await call('POST', '/api/runs/stop')
+      })
+      Then('the response is 200', () => expect(response.statusCode).toBe(200))
+      And('it reports nothing signalled', () => {
+        expect(response.body).toMatchObject({ signalled: 0, killed: 0, stopped: [] })
+      })
+    })
+  })
+
+  Rule('a project says how much authority its runs get', ({ RuleScenario }) => {
+    const givenProject = () => addProject('work', join(root, 'work'))
+    const patchProfile = (profile: unknown) => async (): Promise<void> => {
+      await call('PATCH', `/api/projects/${projectId}`, { profile })
+    }
+    const theProject = (): { profile?: string } =>
+      (response.body.project as { profile?: string } | undefined) ??
+      ((response.body as { items?: { profile?: string }[] }).items ?? []).find(
+        (item) => item !== undefined,
+      ) ??
+      {}
+
+    RuleScenario('A new project states no profile', ({ Given, When, Then }) => {
+      Given("the project \"work\" exists at the scope's directory", givenProject)
+      When('I ask for the projects', () => call('GET', '/api/projects'))
+      Then('the project states no profile', () => expect(theProject().profile).toBeUndefined())
+    })
+
+    RuleScenario("A project's profile can be set", ({ Given, When, Then, And }) => {
+      Given("the project \"work\" exists at the scope's directory", givenProject)
+      When('I set the project\'s profile to "full-access"', patchProfile('full-access'))
+      Then('the project\'s profile is "full-access"', () =>
+        expect(theProject().profile).toBe('full-access'),
+      )
+      And('nothing was scaffolded', () =>
+        expect((response.body as { scaffolded?: { written?: string[] } }).scaffolded?.written ?? [])
+          .toEqual([]),
+      )
+    })
+
+    RuleScenario("A project's profile can be cleared back to unstated", ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given("the project \"work\" exists at the scope's directory", givenProject)
+      And('the project\'s profile is "full-access"', patchProfile('full-access'))
+      When("I clear the project's profile", patchProfile(null))
+      Then('the project states no profile', () => expect(theProject().profile).toBeUndefined())
+    })
+
+    RuleScenario('A profile that is not one is refused', ({ Given, When, Then, And }) => {
+      Given("the project \"work\" exists at the scope's directory", givenProject)
+      When('I set the project\'s profile to "sort-of-safe"', patchProfile('sort-of-safe'))
+      Then('the response is 400', () => expect(response.statusCode).toBe(400))
+      And('the response says what a profile can be', () =>
+        expect(String((response.body as { error?: string }).error)).toContain('full-access'),
+      )
+    })
+
+    RuleScenario('An empty project patch says the profile is an option', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given("the project \"work\" exists at the scope's directory", givenProject)
+      When('I send an empty project patch', async () => {
+        await call('PATCH', `/api/projects/${projectId}`, {})
+      })
+      Then('the response is 400', () => expect(response.statusCode).toBe(400))
+      And('the response says what a profile can be', () =>
+        expect(String((response.body as { error?: string }).error)).toContain('profile'),
+      )
     })
   })
 })

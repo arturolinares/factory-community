@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import {
+  DISCLAIMER,
+  NOT_ACCEPTED,
   TASK_ACTIONS,
   TASK_STATES,
   TASK_TOOL_KIND,
   TERMINAL_KIND,
+  hasAccepted,
   knownToolDirectories,
   requestFor,
   systemDetachedLauncher,
@@ -44,6 +47,15 @@ export function registerTaskRoutes(
   // assert what would have been started without starting it.
   const launch = options.launch ?? systemDetachedLauncher
   const { tasks, runs, chains } = service
+
+  /**
+   * Whether this installation has been told what an agent run can reach.
+   *
+   * Read fresh each time rather than captured, for the reason
+   * `disabledPluginNames` gives: accepting it has to take effect without a
+   * restart, and the holder is the one live copy.
+   */
+  const accepted = (): boolean => hasAccepted(runtime.settings.current().security.acceptedVersion)
 
   /**
    * Phases carried out over phases the plan contains.
@@ -530,6 +542,21 @@ export function registerTaskRoutes(
         })
       }
 
+      // The one gate, and it is here rather than in the browser because the
+      // browser is not the only client: the CLI and `curl` start runs too, and
+      // a disclaimer only the web app enforces is advice rather than a gate.
+      //
+      // On `queue` and `retry` alone — the two actions that lead to an agent
+      // running. Cancelling, archiving or approving something already under way
+      // must never be blocked by this: that would trap a person who most needs
+      // to stop what is happening.
+      if ((action === 'queue' || action === 'retry') && !accepted()) {
+        return reply.code(409).send({
+          error: NOT_ACCEPTED,
+          disclaimer: DISCLAIMER,
+        })
+      }
+
       const updated = tasks.act(task.id, action, {
         ...(request.body?.reason === undefined ? {} : { reason: request.body.reason }),
       })
@@ -540,6 +567,25 @@ export function registerTaskRoutes(
   app.delete<{ Params: { id: string } }>('/api/tasks/:id', async (request, reply) => {
     if (!tasks.delete(request.params.id)) return notFound(reply, request.params.id)
     return reply.code(204).send()
+  })
+
+  /**
+   * Stop every agent Factory started. The kill switch.
+   *
+   * A POST with no body and no target, because "stop everything" takes no
+   * arguments and the moment somebody wants it is not the moment to make them
+   * name things. The engine does the work — process trees first, then the task
+   * transitions — so the API, the CLI and a desktop menu item cannot differ
+   * about what it leaves behind.
+   *
+   * Never gated on the disclaimer. Refusing to *stop* work because nobody has
+   * agreed to a notice would be the most hostile possible reading of a safety
+   * feature.
+   */
+  app.post('/api/runs/stop', async () => {
+    const before = service.engine.running()
+    const report = await service.engine.stopAll('Stopped by request.')
+    return { stopped: before, ...report }
   })
 
   app.get<{ Params: { id: string } }>('/api/runs/:id', async (request, reply) => {

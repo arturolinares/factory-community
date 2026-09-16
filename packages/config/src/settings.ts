@@ -1,7 +1,14 @@
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { closedWithExtensions, problemsFromZod, type Problem } from '@factory/core'
+import {
+  closedWithExtensions,
+  DEFAULT_PROFILE,
+  EXECUTION_PROFILES,
+  problemsFromZod,
+  type Problem,
+} from '@factory/core'
+import type { ExecutionProfile } from '@factory/core'
 import type { ScopeChain } from './scopes.js'
 
 /**
@@ -39,6 +46,25 @@ const shape = {
      */
     scale: z.number().min(1).max(MAX_UI_SCALE).default(1),
   }).default({ scale: 1 }),
+  security: closedWithExtensions({
+    /**
+     * Which disclaimer this installation has accepted, if any.
+     *
+     * A number rather than a boolean so that a material change in what an agent
+     * may reach can ask again. Absent means never accepted, which is what a
+     * fresh installation is — and the daemon refuses to start a run until it
+     * is not absent.
+     */
+    acceptedVersion: z.number().int().min(1).optional(),
+    /**
+     * What new projects get, and what a project that states nothing follows.
+     *
+     * Here rather than on each project because it is a per-person preference:
+     * "on this machine, agents are confined unless I say otherwise". A project
+     * overrides it, and `resolveProfile` is the one place the order is written.
+     */
+    profile: z.enum(EXECUTION_PROFILES).default(DEFAULT_PROFILE),
+  }).default({ profile: DEFAULT_PROFILE }),
   plugins: closedWithExtensions({
     /**
      * Plugins the installation has switched off.
@@ -59,6 +85,10 @@ export type FactorySettings = z.infer<typeof settingsSchema>
 export interface SettingsPatch {
   readonly ui?: { readonly scale?: number }
   readonly plugins?: { readonly disabled?: readonly string[] }
+  readonly security?: {
+    readonly acceptedVersion?: number
+    readonly profile?: ExecutionProfile
+  }
 }
 
 /** What an installation with no settings file behaves as. */
@@ -137,10 +167,16 @@ export function writeSettings(
   }
 
   const current = readSettings(chain).settings
+  // Merged one level down, per named group. The cost of that is this function:
+  // a new top-level group not added here is written nowhere and *silently* —
+  // the call succeeds, the file is rewritten, and the new value is gone. Noted
+  // in improvements.md as the thing to replace; asserted meanwhile by scenarios
+  // that write one group and check the others survived.
   const merged = {
     ...current,
     kind: SETTINGS_KIND,
     ui: { ...current.ui, ...(patch.ui ?? {}) },
+    security: { ...current.security, ...(patch.security ?? {}) },
     plugins: {
       ...current.plugins,
       ...(patch.plugins === undefined

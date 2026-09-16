@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { scaffoldProjectDefinitions } from '@factory/config'
-import type { Project, ProjectSetting } from '@factory/core'
+import { EXECUTION_PROFILES, isExecutionProfile } from '@factory/core'
+import type { ExecutionProfile, Project, ProjectSetting } from '@factory/core'
 import type { Runtime } from '@factory/runtime'
 import type { Service } from '../service.js'
 
@@ -127,16 +128,27 @@ export function registerProjectRoutes(
    */
   app.patch<{
     Params: { id: string }
-    Body: { usesWorktrees?: boolean; usesEnvironments?: boolean }
+    Body: { usesWorktrees?: boolean; usesEnvironments?: boolean; profile?: unknown }
   }>('/api/projects/:id', async (request, reply) => {
     if (projects.get(request.params.id) === undefined) {
       return reply.code(404).send({ error: `No project ${request.params.id}.` })
     }
-    const { usesWorktrees, usesEnvironments } = request.body ?? {}
-    if (usesWorktrees === undefined && usesEnvironments === undefined) {
-      return reply
-        .code(400)
-        .send({ error: 'Send { usesWorktrees } or { usesEnvironments }, true or false.' })
+    const { usesWorktrees, usesEnvironments, profile } = request.body ?? {}
+    const settingProfile = 'profile' in (request.body ?? {})
+    if (usesWorktrees === undefined && usesEnvironments === undefined && !settingProfile) {
+      return reply.code(400).send({
+        error:
+          'Send { usesWorktrees } or { usesEnvironments }, true or false, ' +
+          'or { profile } to say how much authority its runs get.',
+      })
+    }
+    // `null` clears it, which is not the same as `default`: a project that
+    // states nothing follows the installation's choice, and returning to that
+    // has to be expressible.
+    if (settingProfile && profile !== null && !isExecutionProfile(profile)) {
+      return reply.code(400).send({
+        error: `profile is ${EXECUTION_PROFILES.join(', ')} or null to follow the installation.`,
+      })
     }
     if (
       (usesWorktrees !== undefined && typeof usesWorktrees !== 'boolean') ||
@@ -159,6 +171,14 @@ export function registerProjectRoutes(
       if (usesEnvironments !== undefined) {
         project = projects.setEnvironments(request.params.id, usesEnvironments)
         if (usesEnvironments) scaffolded.push(scaffold(project, 'environments'))
+      }
+      if (settingProfile) {
+        // Nothing is scaffolded for a profile: it changes what the next run is
+        // *given*, not what the repository contains.
+        project = projects.setProfile(
+          request.params.id,
+          profile === null ? undefined : (profile as ExecutionProfile),
+        )
       }
 
       return { project, scaffolded: merge(scaffolded) }

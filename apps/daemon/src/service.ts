@@ -9,7 +9,13 @@ import {
   type WorkflowFacts,
 } from '@factory/engine'
 import { definitionPath, planWorkflow, resolveWorkflow } from '@factory/config'
-import { artifactsRoot, systemCanonical, taskTokenValues, workspaceFor } from '@factory/core'
+import {
+  artifactsRoot,
+  resolveProfile,
+  systemCanonical,
+  taskTokenValues,
+  workspaceFor,
+} from '@factory/core'
 import type { FAILURE_TOKENS, PROJECT_TOKENS } from '@factory/core'
 import { createChains, type Chains } from './chains.js'
 import {
@@ -23,7 +29,7 @@ import {
 } from '@factory/store'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Project, Task, TaskWorkspace } from '@factory/core'
+import type { ExecutionProfile, Project, Task, TaskWorkspace } from '@factory/core'
 import type { Runtime } from '@factory/runtime'
 
 /**
@@ -142,6 +148,26 @@ export async function createService(
     return artifactsRoot(base, task.directory ?? 'local', join)
   }
 
+  /**
+   * How much authority this task's run gets.
+   *
+   * Read per plan rather than cached: a person can change a project's profile
+   * between runs, and the next run should use what the board currently says.
+   */
+  const profileFor = (task: Task): ExecutionProfile => {
+    const project = task.projectId === undefined ? undefined : projects.get(task.projectId)
+    return resolveProfile({
+      project: project?.profile,
+      installation: runtime.settings.current().security.profile,
+    })
+  }
+
+  /** Directories this task's project has granted beyond its workspace. */
+  const grantsFor = (task: Task): readonly string[] => {
+    const project = task.projectId === undefined ? undefined : projects.get(task.projectId)
+    return project?.grantedDirectories ?? []
+  }
+
   const engine = new Engine({
     tasks,
     runs,
@@ -160,6 +186,12 @@ export async function createService(
         // The daemon has a filesystem, so the boundary check gets the answer
         // that includes symlinks rather than the lexical one core falls back to.
         canonical: systemCanonical,
+        // Where the profile stops being a setting and starts being flags. One
+        // resolution, one order — the project's choice, then the installation's,
+        // then `default` — and `resolveProfile` is where that order is written.
+        profile: profileFor(task),
+        // What the project has granted beyond its workspace, standing.
+        allowedDirectories: grantsFor(task),
         // Forwarded, not decided here: the engine owns the session's lifecycle
         // because it is the only thing that sees both the task's recorded one
         // and the run about to start.

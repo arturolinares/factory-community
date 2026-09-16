@@ -70,6 +70,14 @@ export interface PlanStepContext {
    */
   readonly profile?: ExecutionProfile
   /**
+   * Directories outside `cwd` this step may reach, as the project granted them.
+   *
+   * A planner that renders a command for something else passes these on. One
+   * that runs its own command can ignore them: it is already confined to `cwd`
+   * by the runner, and nothing it does is mediated by a flag.
+   */
+  readonly allowedDirectories?: readonly string[]
+  /**
    * Absolute directory the step will run in.
    *
    * Told to the planner rather than decided by it: where work happens is the

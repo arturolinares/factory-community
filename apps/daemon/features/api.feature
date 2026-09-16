@@ -249,3 +249,66 @@ Feature: The definitions API
     Scenario: A patch naming nothing is refused
       When I patch the settings with nothing
       Then the response is 400
+
+  Rule: the disclaimer is recorded once, and the profile is a setting
+
+    Factory coordinates other people's coding agents against real repositories,
+    and until now it did that with no boundary of its own and said nothing about
+    it. One screen, once. The version is a number rather than a flag so that a
+    material change in what an agent may reach can ask again — and the number
+    stored is Factory's, never the client's, or a client could accept a notice
+    it had not been shown.
+
+    Scenario: A fresh installation has accepted nothing
+      When I ask for the settings
+      Then it says nothing has been accepted
+      And it carries the disclaimer to show
+      And the disclaimer says which profile removes the boundaries
+
+    Scenario: Accepting it is recorded
+      When I accept the disclaimer
+      Then the response says it is accepted
+      And the settings say it is accepted
+      And the file records the current version
+
+    Scenario: Accepting it twice is not an error
+      Given the disclaimer has been accepted
+      When I accept the disclaimer
+      Then the response says it is accepted
+
+    Scenario: An older acceptance is not enough
+      Given the settings file records an acceptance of version 0
+      When I ask for the settings
+      # Rejected by the schema — the version is at least 1 — so it reads as
+      # never accepted, which is the safe direction.
+      Then it says nothing has been accepted
+
+    Scenario: The default profile for new projects can be changed
+      When I set the installation profile to "full-access"
+      Then the settings say the installation profile is "full-access"
+
+    Scenario: A profile that is not one is refused
+      When I set the installation profile to "sort-of-safe"
+      Then the response is 400
+      And the response names the profiles
+
+    Scenario: Changing the profile leaves the other settings alone
+      Given the interface scale is 2
+      And a plugin is switched off
+      When I set the installation profile to "full-access"
+      # The settings file is merged one level down, per named group, and a group
+      # that is not merged is dropped *silently*. This is the guard.
+      Then the settings say the installation profile is "full-access"
+      And the interface scale is still 2
+      And the plugin is still switched off
+
+    Scenario: Changing the scale leaves the profile alone
+      Given the installation profile is "full-access"
+      When I set the interface scale to 2
+      Then the interface scale is 2
+      And the settings say the installation profile is "full-access"
+
+    Scenario: A patch with nothing in it says what it takes
+      When I send an empty settings patch
+      Then the response is 400
+      And the response mentions the profile
