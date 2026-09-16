@@ -122,9 +122,23 @@ onMounted(() => {
           Factory will ask again only if what an agent may reach changes.
         </span>
       </p>
-      <p v-else-if="settings.accepted === false" class="text-xs text-[var(--color-ink-muted)]">
-        Not yet accepted. No run will start until it is.
-      </p>
+      <div v-else-if="settings.accepted === false">
+        <p class="text-xs text-[var(--color-ink-muted)]">
+          Not yet accepted. No run will start until it is.
+        </p>
+        <!-- Acceptable from here, not only from the panel. This is the page the
+             panel's own "Review permissions" link sends people to, and sending
+             somebody somewhere to read and then giving them no way to agree is
+             a dead end. Accepting here starts nothing: it is not "continue". -->
+        <button
+          type="button"
+          class="mt-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-white"
+          data-testid="accept-here"
+          @click="settings.accept()"
+        >
+          I understand — accept
+        </button>
+      </div>
       <details v-if="settings.disclaimer" class="mt-3">
         <summary
           class="cursor-pointer text-xs text-[var(--color-ink-faint)] underline"

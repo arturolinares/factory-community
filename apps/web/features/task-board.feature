@@ -723,6 +723,35 @@ Feature: The task board
       # reading of the same word.
       And "Add due dates" leaves "draft"
 
+    Scenario: Reviewing the permissions puts the panel away
+      When I open the tasks page
+      And I create the task "Add due dates" on "hello"
+      And I queue it
+      And I follow "Review permissions"
+      # The panel is fixed over the whole viewport in the shell, so a route
+      # change does not touch it — and the one link that sends somebody to read
+      # was blocking the page it sent them to.
+      Then the disclaimer is gone
+      And the settings page says nothing has been accepted
+
+    Scenario: Reviewing it does not accept it, and starts nothing
+      When I open the tasks page
+      And I create the task "Add due dates" on "hello"
+      And I queue it
+      And I follow "Review permissions"
+      # Somebody who chose to go and read has not asked for the run to start.
+      Then "Add due dates" is still "draft"
+
+    Scenario: It can be accepted from the settings page
+      When I open the tasks page
+      And I create the task "Add due dates" on "hello"
+      And I queue it
+      And I follow "Review permissions"
+      And I accept it there
+      Then the settings page says it is accepted
+      # Accepting from a settings page is not "continue what I was doing".
+      And "Add due dates" is still "draft"
+
   Rule: Full Access is impossible to miss
 
     Background:

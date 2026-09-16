@@ -147,6 +147,23 @@ export const useSettings = defineStore('settings', () => {
     }
   }
 
+  /**
+   * Put the panel away without agreeing to anything.
+   *
+   * What "Review permissions" does. The panel is `fixed inset-0` in the shell,
+   * so navigating to the settings page left it sitting over the very page it
+   * had just sent somebody to read — which is how this was found.
+   *
+   * The pending action is dropped, deliberately. Somebody who chose to go and
+   * read rather than to continue has not asked for the run to start, and
+   * starting it when they later accept from a settings page would be a
+   * surprise.
+   */
+  function dismiss(): void {
+    needsAcceptance.value = false
+    continueWith = undefined
+  }
+
   async function setProfile(value: ExecutionProfile): Promise<void> {
     try {
       const answer = await api.saveSettings({ security: { profile: value } })
@@ -201,6 +218,7 @@ export const useSettings = defineStore('settings', () => {
     setScale,
     setProfile,
     accept,
+    dismiss,
     handledRefusal,
   }
 })

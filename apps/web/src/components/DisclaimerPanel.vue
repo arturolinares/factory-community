@@ -93,10 +93,15 @@ async function accept(): Promise<void> {
         >
           Continue with Default
         </button>
+        <!-- Dismisses on the way. Without this the panel stays over the
+             settings page, because it is `fixed inset-0` in the shell and a
+             route change does not touch it — so the one link that sends
+             somebody to read blocked the page they were sent to. -->
         <RouterLink
           to="/settings"
           class="text-xs text-[var(--color-ink-faint)] underline"
           data-testid="review-permissions"
+          @click="settings.dismiss()"
         >
           Review permissions
         </RouterLink>

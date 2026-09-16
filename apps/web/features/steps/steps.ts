@@ -497,7 +497,7 @@ Given('a bundle for the workflow {string}', async ({ world }, name: string) => {
   world.workflow(world.projectScope, name, WORKFLOW)
   world.phase(world.projectScope, 'analysis', PHASE)
   await world.startDaemon()
-  const response = await fetch(`http://127.0.0.1:7317/api/workflows/${name}/export`, {
+  const response = await fetch(world.api(`/api/workflows/${name}/export`), {
     method: 'POST',
   })
   world.bundle = ((await response.json()) as { text: string }).text
@@ -1179,7 +1179,7 @@ Given(
   async ({ world }, name: string) => {
     await world.startDaemon()
     const id = await world.addProject(name, world.workDir)
-    await fetch(`http://127.0.0.1:7317/api/projects/${id}`, {
+    await fetch(world.api(`/api/projects/${id}`), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ usesEnvironments: true }),
@@ -1232,7 +1232,7 @@ Given(
     await world.startDaemon()
     const id = await world.addProject(name, world.workDir)
     // Worktrees are on by default, so this has to be switched off explicitly.
-    await fetch(`http://127.0.0.1:7317/api/projects/${id}`, {
+    await fetch(world.api(`/api/projects/${id}`), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ usesWorktrees: false }),
@@ -1650,4 +1650,33 @@ Then('{string} leaves {string}', async ({ page }, name: string, state: string) =
   await expect(
     page.getByTestId(`task-row-${name}`).getByTestId(`state-${state}`),
   ).toHaveCount(0, { timeout: 10_000 })
+})
+
+When('I follow {string}', async ({ page }, label: string) => {
+  // By its test id rather than its text: this is the panel's own control, and
+  // the label is prose somebody may reword.
+  if (label === 'Review permissions') {
+    await page.getByTestId('review-permissions').click()
+    return
+  }
+  await page.getByRole('link', { name: label }).click()
+})
+
+When('I accept it there', async ({ page }) => {
+  await page.getByTestId('accept-here').click()
+})
+
+Then('the settings page says nothing has been accepted', async ({ page }) => {
+  await expect(page.getByTestId('disclaimer-state')).toContainText('Not yet accepted')
+})
+
+Then('the settings page says it is accepted', async ({ page }) => {
+  await expect(page.getByTestId('disclaimer-state')).toContainText('Accepted, version')
+})
+
+Then('{string} is still {string}', async ({ page }, name: string, state: string) => {
+  await page.getByTestId('nav-tasks').click()
+  await expect(
+    page.getByTestId(`task-row-${name}`).getByTestId(`state-${state}`),
+  ).toBeVisible()
 })

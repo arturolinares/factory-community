@@ -11,7 +11,17 @@ const DAEMON = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '../../../../apps/daemon/dist/bin.js',
 )
-const PORT = 7317
+/**
+ * The daemon this suite starts, and the dev server it drives.
+ *
+ * Read from the environment rather than fixed, so a run can sidestep a real
+ * Factory that already holds 7317 — Pro's desktop app does, whenever it is
+ * open. When they collided, the suite's own daemon could not bind and the run
+ * carried on against whatever answered, which once was the developer's real
+ * installation. `FACTORY_PORT=7417 FACTORY_WEB_PORT=5417 pnpm test:e2e` is now
+ * all it takes to run alongside one.
+ */
+const PORT = Number(process.env.FACTORY_PORT ?? 7317)
 
 /**
  * A throwaway installation per scenario.
@@ -109,6 +119,19 @@ export class World {
   createOtherScope(): void {
     mkdirSync(join(this.otherDir, '.git'), { recursive: true })
     this.write(join(this.otherScope, 'config.yaml'), 'kind: factory.scope/v1\nscope: project\n')
+  }
+
+  /**
+   * The daemon this scenario started.
+   *
+   * Exposed because three steps used to build the URL themselves with the port
+   * written in, which worked only while that port was also the default. Running
+   * on another one sent them at whatever was on 7317 — a real installation, as
+   * it turned out — and they failed with 404s from somebody else's data. One
+   * builder, so a step cannot invent a port.
+   */
+  api(path: string): string {
+    return `http://127.0.0.1:${PORT}${path}`
   }
 
   write(path: string, contents: string): void {
