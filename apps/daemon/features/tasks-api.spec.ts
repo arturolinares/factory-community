@@ -2043,6 +2043,18 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       When('I cancel it', action('cancel'))
       Then('the response is 200', () => expect(response.statusCode).toBe(200))
     })
+
+    RuleScenario('Marking a task done by hand is never gated either', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('nothing has been accepted on this installation', nothingAccepted)
+      And('the task "Add due dates" exists with the workflow "hello"', withWorkflow)
+      When('I mark it done', action('mark_done'))
+      Then('the response is 200', () => expect(response.statusCode).toBe(200))
+    })
   })
 
   Rule('everything can be stopped at once', ({ RuleScenario }) => {
@@ -2126,6 +2138,151 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       And('the response says what a profile can be', () =>
         expect(String((response.body as { error?: string }).error)).toContain('profile'),
       )
+    })
+  })
+
+  Rule('a task says what it is waiting for', ({ RuleScenario }) => {
+    const ids = new Map<string, string>()
+    const exists = (name: string) => async (): Promise<void> => {
+      await create(name, ['hello'])
+      ids.set(name, taskId)
+    }
+    const idOf = (name: string) => ids.get(name) as string
+    const waitFor = (name: string, blocker: string) => async (): Promise<void> => {
+      await call('POST', `/api/tasks/${idOf(name)}/dependencies`, { dependsOn: idOf(blocker) })
+    }
+    const blockers = () =>
+      (response.body as { blockers?: { id: string; name: string; status: string }[] }).blockers ??
+      []
+    const status = (code: number) => (): void => expect(response.statusCode).toBe(code)
+    const act = (name: string, action: string) => async (): Promise<void> => {
+      await call('POST', `/api/tasks/${idOf(name)}/actions/${action}`)
+    }
+    const ask = (name: string) => async (): Promise<void> => {
+      await call('GET', `/api/tasks/${idOf(name)}`)
+    }
+
+    RuleScenario('A task with no dependencies lists none', ({ When, And, Then }) => {
+      When('I create the task "Add due dates"', () => create('Add due dates'))
+      And('I ask for the task', () => call('GET', `/api/tasks/${taskId}`))
+      Then('it waits for nothing', () => {
+        expect(blockers()).toEqual([])
+        expect((response.body.task as { dependsOn: string[] }).dependsOn).toEqual([])
+      })
+    })
+
+    RuleScenario('A dependency is written and read back', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      When('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      Then('the response is 200', status(200))
+      And('"The model" waits for 1 task', () => expect(blockers()).toHaveLength(1))
+      And('the blocker is called "Scaffold"', () => expect(blockers()[0]?.name).toBe('Scaffold'))
+      And('the blocker is "waiting"', () => expect(blockers()[0]?.status).toBe('waiting'))
+    })
+
+    RuleScenario('The list says it too', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('I ask for every task', () => call('GET', '/api/tasks'))
+      Then('"The model" waits for "Scaffold" in the list', () => {
+        const items = response.body.items as {
+          name: string
+          blockers: { name: string }[]
+        }[]
+        expect(items.find((item) => item.name === 'The model')?.blockers).toEqual([
+          { id: idOf('Scaffold'), name: 'Scaffold', status: 'waiting' },
+        ])
+      })
+    })
+
+    RuleScenario('A blocker that is done is met', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"Scaffold" is marked done', act('Scaffold', 'mark_done'))
+      And('I ask for "The model"', ask('The model'))
+      Then('the blocker is "met"', () => expect(blockers()[0]?.status).toBe('met'))
+    })
+
+    RuleScenario('A blocker that was cancelled is dead', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"Scaffold" is cancelled', act('Scaffold', 'cancel'))
+      And('I ask for "The model"', ask('The model'))
+      Then('the blocker is "dead"', () => expect(blockers()[0]?.status).toBe('dead'))
+    })
+
+    RuleScenario('A dependency can be taken back', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"The model" stops waiting for "Scaffold"', () =>
+        call('DELETE', `/api/tasks/${idOf('The model')}/dependencies/${idOf('Scaffold')}`),
+      )
+      Then('the response is 200', status(200))
+      And('"The model" waits for 0 tasks', () => expect(blockers()).toEqual([]))
+    })
+
+    RuleScenario("A ring is refused with the store's own words", ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"Scaffold" is made to wait for "The model"', waitFor('Scaffold', 'The model'))
+      Then('the response is 400', status(400))
+      And('the response says it would make a ring', () =>
+        expect(response.body.error).toContain('ring'),
+      )
+    })
+
+    RuleScenario('Waiting for itself is refused', ({ Given, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      When('"Scaffold" is made to wait for itself', waitFor('Scaffold', 'Scaffold'))
+      Then('the response is 400', status(400))
+    })
+
+    RuleScenario('A dependency on a task that is not there is refused', ({
+      Given,
+      When,
+      Then,
+    }) => {
+      Given('the task "The model" exists', exists('The model'))
+      When('"The model" is made to wait for a task that does not exist', () =>
+        call('POST', `/api/tasks/${idOf('The model')}/dependencies`, { dependsOn: 'nope' }),
+      )
+      Then('the response is 400', status(400))
+    })
+
+    RuleScenario('A dependency for a task that is not there is not found', ({ When, Then }) => {
+      When('a task that does not exist is made to wait for something', () =>
+        call('POST', '/api/tasks/nope/dependencies', { dependsOn: 'also-nope' }),
+      )
+      Then('the response is 404', status(404))
+    })
+
+    RuleScenario('Asking what to wait for is required', ({ Given, When, Then, And }) => {
+      Given('the task "The model" exists', exists('The model'))
+      When('I post a dependency with no blocker', () =>
+        call('POST', `/api/tasks/${idOf('The model')}/dependencies`, {}),
+      )
+      Then('the response is 400', status(400))
+      And('the response asks which task it should wait for', () =>
+        expect(response.body.error).toBe('Which task should it wait for?'),
+      )
+    })
+
+    RuleScenario('A task can be marked done over the wire', ({ Given, When, Then, And }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      When('"Scaffold" is marked done', act('Scaffold', 'mark_done'))
+      Then('the response is 200', status(200))
+      And('the task is "done"', () => expect(stateOf()).toBe('done'))
     })
   })
 })

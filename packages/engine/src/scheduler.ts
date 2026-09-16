@@ -1,5 +1,5 @@
-import { dependencyStatus, type BlockerFacts, type Scheduling, type Task } from '@factory/core'
-import type { RunRepository, TaskRepository } from '@factory/store'
+import { dependencyStatus, type Scheduling, type Task } from '@factory/core'
+import type { Blocker, RunRepository, TaskRepository } from '@factory/store'
 import type { EventBus } from '@factory/events'
 
 /**
@@ -249,20 +249,10 @@ export class Scheduler {
     // one question. Blockers are cached for the same reason — several
     // dependents usually wait for the same task.
     const edges = this.#tasks.dependencies()
-    const blockers = new Map<string, Task | undefined>()
-    const blockerOf = (id: string): Task | undefined => {
-      if (!blockers.has(id)) blockers.set(id, this.#tasks.get(id))
+    const blockers = new Map<string, Blocker | undefined>()
+    const blockerOf = (id: string): Blocker | undefined => {
+      if (!blockers.has(id)) blockers.set(id, this.#tasks.blocker(id))
       return blockers.get(id)
-    }
-    const factsOf = (id: string): BlockerFacts | undefined => {
-      const blocker = blockerOf(id)
-      if (blocker === undefined) return undefined
-      // Built by branching rather than spreading `undefined`: under
-      // exactOptionalPropertyTypes an explicitly-undefined key is not absent,
-      // and `completedAt` present-but-undefined would read as "finished".
-      return blocker.completedAt === undefined
-        ? { state: blocker.state }
-        : { state: blocker.state, completedAt: blocker.completedAt }
     }
     const nameOf = (id: string): string => blockerOf(id)?.name ?? id
 
@@ -297,7 +287,7 @@ export class Scheduler {
       // Before the shared-checkout and lane checks, by the same doctrine: the
       // most useful reason is the one naming something the person can act on,
       // and a blocker is a task of theirs in the same project.
-      const dependencies = dependencyStatus(task.id, edges, factsOf)
+      const dependencies = dependencyStatus(task.id, edges, blockerOf)
       if (dependencies.state === 'dead') {
         const because = dependencies.dead
           .map((entry) => `"${nameOf(entry.id)}" ${entry.because}`)

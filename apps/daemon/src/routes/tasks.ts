@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import {
   DISCLAIMER,
   NOT_ACCEPTED,
+  dependencyStatus,
   TASK_ACTIONS,
   TASK_STATES,
   TASK_TOOL_KIND,
@@ -11,8 +12,10 @@ import {
   requestFor,
   systemDetachedLauncher,
   taskToolOffers,
+  type DependencyState,
   type Evidence,
   type Task,
+  type TaskEdge,
   type TaskAction,
   type TaskState,
   type TaskToolCapability,
@@ -23,7 +26,7 @@ import {
   type TerminalOutcome,
 } from '@factory/core'
 import { resolveWorkflow } from '@factory/config'
-import { WorkflowHasRunError, type WorkflowSelection } from '@factory/store'
+import { WorkflowHasRunError, type Blocker, type WorkflowSelection } from '@factory/store'
 import type { Service } from '../service.js'
 import type { Runtime } from '@factory/runtime'
 
@@ -110,6 +113,45 @@ export function registerTaskRoutes(
   }
 
   /**
+   * What a task waits for, resolved for display.
+   *
+   * Derived per request, the way progress is: the scheduler and this route both
+   * call `dependencyStatus`, so there is one rule about what counts as done and
+   * no column to go stale. The task itself carries the ids — lossless, and
+   * still the thing a client sends back when it edits the graph — and this adds
+   * the names and the verdict a person reads.
+   *
+   * `status` per blocker rather than one answer per task, because the two a
+   * board draws differently sit side by side: what it is still waiting for, and
+   * what it will now never get.
+   */
+  const dependencyView = (
+    edges: readonly TaskEdge[],
+  ): ((task: Task) => readonly { id: string; name: string; status: DependencyState }[]) => {
+    // Memoised per request for the same reason `phaseNames` is: a board of
+    // twenty tasks waiting on five usually asks about the same five.
+    const seen = new Map<string, Blocker | undefined>()
+    const blockerOf = (id: string): Blocker | undefined => {
+      if (!seen.has(id)) seen.set(id, tasks.blocker(id))
+      return seen.get(id)
+    }
+    return (task: Task) => {
+      if (task.dependsOn.length === 0) return []
+      const status = dependencyStatus(task.id, edges, blockerOf)
+      const waiting = new Set(status.waitingFor)
+      const dead = new Set(status.dead.map((entry) => entry.id))
+      return task.dependsOn.map((id) => ({
+        id,
+        // A blocker nobody can find needs a hand-edited database to reach —
+        // deleting a task takes its edges with it — but naming it by id beats
+        // drawing an empty label.
+        name: blockerOf(id)?.name ?? id,
+        status: (waiting.has(id) ? 'waiting' : dead.has(id) ? 'dead' : 'met') as DependencyState,
+      }))
+    }
+  }
+
+  /**
    * The phase names of each workflow, for one project, remembered.
    *
    * A **set of names**, not a count: `run_steps` records a phase's name and
@@ -150,6 +192,8 @@ export function registerTaskRoutes(
         ...(state === undefined ? {} : { state }),
         ...(request.query.archived === 'true' ? { includeArchived: true } : {}),
       })
+      // One read for the whole board, not one per row.
+      const blockers = dependencyView(tasks.dependencies())
       return {
         items: items.map((task) => ({
           ...task,
@@ -157,6 +201,7 @@ export function registerTaskRoutes(
           // Computed here rather than in the browser, which would need a
           // request per row to do the same sum.
           progress: progressOf(task),
+          blockers: blockers(task),
         })),
       }
     },
@@ -331,6 +376,7 @@ export function registerTaskRoutes(
       // The detail page never had this, so the page someone actually watches a
       // task on was the one place that could not say how far it had got.
       progress: progressOf(task),
+      blockers: dependencyView(tasks.dependencies())(task),
       artifacts: artifactsOf(task.id),
       // Only on the detail: one string per task that no list view draws, and
       // resolving it reads the project row.
@@ -561,6 +607,54 @@ export function registerTaskRoutes(
         ...(request.body?.reason === undefined ? {} : { reason: request.body.reason }),
       })
       return { task: updated, actions: tasks.actions(updated.id) }
+    },
+  )
+
+  /**
+   * Make this task wait for another, or stop it waiting.
+   *
+   * Two routes rather than a whole-list PUT: a picker adds and removes one edge
+   * at a time, and a PUT would make two people editing the same task's
+   * dependencies silently overwrite each other.
+   *
+   * Every refusal the store makes — itself, a blocker in another project, a
+   * ring — comes back as a 400 carrying the store's own sentence. Rewording it
+   * here would mean two explanations of one rule, and the one nobody reads
+   * would be the one in the interface.
+   */
+  app.post<{ Params: { id: string }; Body: { dependsOn?: string } }>(
+    '/api/tasks/:id/dependencies',
+    async (request, reply) => {
+      const task = tasks.get(request.params.id)
+      if (task === undefined) return notFound(reply, request.params.id)
+      const blockerId = request.body?.dependsOn
+      if (typeof blockerId !== 'string' || blockerId.trim() === '') {
+        return reply.code(400).send({ error: 'Which task should it wait for?' })
+      }
+      try {
+        const updated = tasks.dependOn(task.id, blockerId.trim())
+        return {
+          task: updated,
+          actions: tasks.actions(updated.id),
+          blockers: dependencyView(tasks.dependencies())(updated),
+        }
+      } catch (error) {
+        return reply.code(400).send({ error: (error as Error).message })
+      }
+    },
+  )
+
+  app.delete<{ Params: { id: string; blockerId: string } }>(
+    '/api/tasks/:id/dependencies/:blockerId',
+    async (request, reply) => {
+      const task = tasks.get(request.params.id)
+      if (task === undefined) return notFound(reply, request.params.id)
+      const updated = tasks.independ(task.id, request.params.blockerId)
+      return {
+        task: updated,
+        actions: tasks.actions(updated.id),
+        blockers: dependencyView(tasks.dependencies())(updated),
+      }
     },
   )
 

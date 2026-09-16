@@ -718,6 +718,14 @@ Feature: Tasks, runs and live updates over HTTP
       # The one action a person reaches for when something is going wrong.
       Then the response is 200
 
+    Scenario: Marking a task done by hand is never gated either
+      Given nothing has been accepted on this installation
+      And the task "Add due dates" exists with the workflow "hello"
+      # Nothing runs, so there is nothing to be warned about. Gating it would
+      # trap somebody tidying up after work they did themselves.
+      When I mark it done
+      Then the response is 200
+
   Rule: everything can be stopped at once
 
     Scenario: Stopping everything when nothing is running is not an error
@@ -755,3 +763,96 @@ Feature: Tasks, runs and live updates over HTTP
       When I send an empty project patch
       Then the response is 400
       And the response says what a profile can be
+
+  Rule: a task says what it is waiting for
+
+    Derived per request rather than stored, the way progress is. The scheduler
+    and the route both ask the same function what counts as done, so there is
+    one rule and no column to go stale.
+
+    The task carries the ids, which is what a client sends back when it edits
+    the graph. The names and the verdict travel beside them, because a row that
+    said "waiting for 0f3a-91c2" would be useless.
+
+    Scenario: A task with no dependencies lists none
+      When I create the task "Add due dates"
+      And I ask for the task
+      Then it waits for nothing
+
+    Scenario: A dependency is written and read back
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      When "The model" is made to wait for "Scaffold"
+      Then the response is 200
+      And "The model" waits for 1 task
+      And the blocker is called "Scaffold"
+      And the blocker is "waiting"
+
+    Scenario: The list says it too
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When I ask for every task
+      # One read for the whole board. A client that asked per row would make
+      # twenty requests to draw twenty rows.
+      Then "The model" waits for "Scaffold" in the list
+
+    Scenario: A blocker that is done is met
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "Scaffold" is marked done
+      And I ask for "The model"
+      Then the blocker is "met"
+
+    Scenario: A blocker that was cancelled is dead
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "Scaffold" is cancelled
+      And I ask for "The model"
+      Then the blocker is "dead"
+
+    Scenario: A dependency can be taken back
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "The model" stops waiting for "Scaffold"
+      Then the response is 200
+      And "The model" waits for 0 tasks
+
+    Scenario: A ring is refused with the store's own words
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "Scaffold" is made to wait for "The model"
+      Then the response is 400
+      And the response says it would make a ring
+
+    Scenario: Waiting for itself is refused
+      Given the task "Scaffold" exists
+      When "Scaffold" is made to wait for itself
+      Then the response is 400
+
+    Scenario: A dependency on a task that is not there is refused
+      Given the task "The model" exists
+      When "The model" is made to wait for a task that does not exist
+      Then the response is 400
+
+    Scenario: A dependency for a task that is not there is not found
+      When a task that does not exist is made to wait for something
+      Then the response is 404
+
+    Scenario: Asking what to wait for is required
+      Given the task "The model" exists
+      When I post a dependency with no blocker
+      Then the response is 400
+      # In words, not as whatever the store throws when it is handed nothing.
+      # Both are 400s; only one of them can be read.
+      And the response asks which task it should wait for
+
+    Scenario: A task can be marked done over the wire
+      Given the task "Scaffold" exists
+      When "Scaffold" is marked done
+      Then the response is 200
+      And the task is "done"

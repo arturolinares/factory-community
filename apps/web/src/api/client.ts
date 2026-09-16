@@ -262,11 +262,28 @@ export interface Task {
   createdAt: string
   updatedAt: string
   completedAt?: string
+  /**
+   * Ids of the tasks this one waits for.
+   *
+   * Ids, because that is what the graph is keyed by and what a client sends
+   * back when it edits it. `blockers` beside it carries the names and the
+   * verdict to draw.
+   */
+  dependsOn: string[]
+}
+
+/** What this task waits for, resolved by the daemon for display. */
+export interface TaskBlocker {
+  id: string
+  name: string
+  /** `waiting` will come, `dead` never will, `met` already has. */
+  status: 'met' | 'waiting' | 'dead'
 }
 
 export interface TaskListItem extends Task {
   actions: AvailableAction[]
   progress?: { completed: number; total: number }
+  blockers: TaskBlocker[]
 }
 
 export interface TaskHistoryEntry {
@@ -452,6 +469,7 @@ export interface TaskDetail {
   runs: Run[]
   /** Phases carried out over phases planned. Absent when there is no plan yet. */
   progress?: { completed: number; total: number }
+  blockers: TaskBlocker[]
   artifacts: TaskArtifact[]
   /** Absent for a task belonging to no project: there is nowhere to show. */
   workspace?: TaskWorkspace
@@ -785,6 +803,26 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ name }),
     }),
+
+  /**
+   * Make a task wait for another, or stop it waiting.
+   *
+   * One edge at a time rather than sending the whole list: a picker adds and
+   * removes one at a time, and a whole-list write would let two people editing
+   * the same task overwrite each other. A refusal comes back as a 400 carrying
+   * the daemon's sentence, which is the store's sentence.
+   */
+  dependOn: (id: string, dependsOn: string) =>
+    request<{ task: Task; actions: AvailableAction[]; blockers: TaskBlocker[] }>(
+      `/api/tasks/${encodeURIComponent(id)}/dependencies`,
+      { method: 'POST', body: JSON.stringify({ dependsOn }) },
+    ),
+
+  independ: (id: string, dependsOn: string) =>
+    request<{ task: Task; actions: AvailableAction[]; blockers: TaskBlocker[] }>(
+      `/api/tasks/${encodeURIComponent(id)}/dependencies/${encodeURIComponent(dependsOn)}`,
+      { method: 'DELETE' },
+    ),
 
   /**
    * Do what one of a task's tools offers.

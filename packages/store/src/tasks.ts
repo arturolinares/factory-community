@@ -6,6 +6,7 @@ import {
   queueOrder,
   taskDirectory,
   type AvailableAction,
+  type BlockerFacts,
   type Task,
   type TaskWorkflowEntry,
   type TaskAction,
@@ -13,6 +14,12 @@ import {
   type TaskState,
 } from '@factory/core'
 import type { Database } from './sqlite.js'
+
+/** One task a dependent is waiting for, ready to be decided on and named. */
+export interface Blocker extends BlockerFacts {
+  readonly id: string
+  readonly name: string
+}
 
 /**
  * Tasks, on disk.
@@ -467,6 +474,25 @@ export class TaskRepository {
     return this.#db
       .all<{ flag: string }>('SELECT flag FROM task_flags WHERE task_id = ? ORDER BY flag', id)
       .map((row) => row.flag)
+  }
+
+  /**
+   * What a dependent needs to know about one blocker, plus the name to say it
+   * with.
+   *
+   * Shaped here rather than at each caller so the scheduler and the API cannot
+   * disagree about it. `completedAt` is the part that has to be right:
+   * `archived` is reachable from `done` and from `draft` alike, so it is the
+   * only thing that tells "finished, then put away" from "put away", and a
+   * caller spreading an undefined key into it under
+   * `exactOptionalPropertyTypes` would have it read as finished.
+   */
+  blocker(id: string): Blocker | undefined {
+    const task = this.get(id)
+    if (task === undefined) return undefined
+    return task.completedAt === undefined
+      ? { id: task.id, name: task.name, state: task.state }
+      : { id: task.id, name: task.name, state: task.state, completedAt: task.completedAt }
   }
 
   /** The tasks this one is waiting for, oldest edge first. */
