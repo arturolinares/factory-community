@@ -1,9 +1,19 @@
 import { describeFeature, loadFeature } from '@amiceli/vitest-cucumber'
 import { expect } from 'vitest'
 import { fileURLToPath } from 'node:url'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { EventBus } from '@factory/events'
-import type { Task } from '@factory/core'
-import { MIGRATIONS, RunRepository, TaskRepository, openStore, type Store } from '../src/index.js'
+import type { Task, TaskEdge } from '@factory/core'
+import {
+  MIGRATIONS,
+  ProjectRepository,
+  RunRepository,
+  TaskRepository,
+  openStore,
+  type Store,
+} from '../src/index.js'
 
 const feature = await loadFeature(fileURLToPath(new URL('./tasks.feature', import.meta.url)))
 
@@ -629,6 +639,201 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
         created('Second task', 'shared'),
       )
       Then('its directory is "shared-2"', directoryIs('shared-2'))
+    })
+  })
+
+  Rule('A task can be made to wait for another in the same project', ({ RuleScenario }) => {
+    let edges: readonly TaskEdge[] = []
+
+    // Built here rather than in Background: only these scenarios need a
+    // project, and a project needs a directory on disk that looks like a git
+    // repository.
+    const projectsIn = (): ProjectRepository =>
+      new ProjectRepository({
+        db: store.db,
+        now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, tick++)).toISOString(),
+        newId: () => `project-${(minted += 1)}`,
+      })
+    const projects = new Map<string, string>()
+    const addProject = (name: string) => (): void => {
+      const root = mkdtempSync(join(tmpdir(), 'factory-task-deps-'))
+      mkdirSync(join(root, '.git'), { recursive: true })
+      projects.set(name, projectsIn().add({ name, path: root }).id)
+    }
+    const createIn = (name: string, project: string) => (): void => {
+      const created = tasks.create({ name, projectId: projects.get(project) as string })
+      byName.set(name, created.id)
+      task = created
+    }
+    const exists = (name: string) => (): void => create(name)
+    const waitFor = (name: string, blocker: string) => (): void => {
+      try {
+        task = tasks.dependOn(idOf(name), idOf(blocker))
+      } catch (error) {
+        failure = error
+      }
+    }
+    const stopWaiting = (name: string, blocker: string) => (): void => {
+      task = tasks.independ(idOf(name), idOf(blocker))
+    }
+    const waitsFor = (name: string, blockers: readonly string[]) => (): void => {
+      expect(tasks.get(idOf(name))?.dependsOn).toEqual(blockers.map(idOf))
+    }
+    const refused = (): void => expect(failure).toBeInstanceOf(Error)
+    const refusalSays = (fragment: string) => (): void => {
+      expect((failure as Error).message).toContain(fragment)
+    }
+    const rowsLeft = (): number =>
+      store.db.all<{ task_id: string }>('SELECT task_id FROM task_dependencies').length
+
+    RuleScenario('A new task waits for nothing', ({ Given, Then }) => {
+      Given('the task "Add due dates" exists', exists('Add due dates'))
+      Then('it waits for nothing', () => expect(task?.dependsOn).toEqual([]))
+    })
+
+    RuleScenario('One task is made to wait for another', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      When('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      Then('"The model" waits for "Scaffold"', waitsFor('The model', ['Scaffold']))
+      And('"Scaffold" waits for nothing', waitsFor('Scaffold', []))
+    })
+
+    RuleScenario('The same edge twice is one edge', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"The model" is made to wait for "Scaffold" again', waitFor('The model', 'Scaffold'))
+      Then('"The model" waits for exactly 1 task', () => {
+        expect(tasks.get(idOf('The model'))?.dependsOn).toHaveLength(1)
+        expect(failure).toBeUndefined()
+      })
+    })
+
+    RuleScenario('The edge can be taken back', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"The model" stops waiting for "Scaffold"', stopWaiting('The model', 'Scaffold'))
+      Then('"The model" waits for nothing', waitsFor('The model', []))
+    })
+
+    RuleScenario('Taking back an edge that is not there is not an error', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      When('"The model" stops waiting for "Scaffold"', stopWaiting('The model', 'Scaffold'))
+      Then('"The model" waits for nothing', waitsFor('The model', []))
+    })
+
+    RuleScenario('A task cannot wait for itself', ({ Given, When, Then, And }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      When('"Scaffold" is made to wait for "Scaffold"', waitFor('Scaffold', 'Scaffold'))
+      Then('it is refused', refused)
+      And('the refusal says it cannot depend on itself', () => {
+        expect((failure as Error).message).toBe('"Scaffold" cannot depend on itself.')
+      })
+    })
+
+    RuleScenario('A task cannot wait for one in another project', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the project "one" exists', addProject('one'))
+      And('the project "two" exists', addProject('two'))
+      And('the task "Scaffold" exists in "one"', createIn('Scaffold', 'one'))
+      And('the task "The model" exists in "two"', createIn('The model', 'two'))
+      When('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      Then('it is refused', refused)
+      And('the refusal says they are in different projects', refusalSays('different projects'))
+    })
+
+    RuleScenario('A task cannot wait for one that is not there', ({ Given, When, Then }) => {
+      Given('the task "The model" exists', exists('The model'))
+      When('"The model" is made to wait for a task that does not exist', () => {
+        try {
+          tasks.dependOn(idOf('The model'), 'nope')
+        } catch (error) {
+          failure = error
+        }
+      })
+      Then('it is refused', refused)
+    })
+
+    RuleScenario('An edge that would make a ring is refused', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"Scaffold" is made to wait for "The model"', waitFor('Scaffold', 'The model'))
+      Then('it is refused', refused)
+      And('the refusal says it would make a ring', refusalSays('ring'))
+    })
+
+    RuleScenario('A longer ring is refused too', ({ Given, And, When, Then }) => {
+      Given('the task "One" exists', exists('One'))
+      And('the task "Two" exists', exists('Two'))
+      And('the task "Three" exists', exists('Three'))
+      And('"Two" is made to wait for "One"', waitFor('Two', 'One'))
+      And('"Three" is made to wait for "Two"', waitFor('Three', 'Two'))
+      When('"One" is made to wait for "Three"', waitFor('One', 'Three'))
+      Then('it is refused', refused)
+      And('the refusal says it would make a ring', refusalSays('ring'))
+    })
+
+    RuleScenario('Deleting the waiting task removes the edge', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"The model" is deleted', () => {
+        tasks.delete(idOf('The model'))
+      })
+      Then('no dependency rows are left', () => expect(rowsLeft()).toBe(0))
+    })
+
+    RuleScenario('Deleting the blocker removes the edge', ({ Given, And, When, Then }) => {
+      Given('the task "Scaffold" exists', exists('Scaffold'))
+      And('the task "The model" exists', exists('The model'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('"Scaffold" is deleted', () => {
+        tasks.delete(idOf('Scaffold'))
+      })
+      Then('no dependency rows are left', () => expect(rowsLeft()).toBe(0))
+    })
+
+    RuleScenario('Another project\'s edges are left out', ({ Given, And, When, Then }) => {
+      Given('the project "one" exists', addProject('one'))
+      And('the project "two" exists', addProject('two'))
+      And('the task "Scaffold" exists in "one"', createIn('Scaffold', 'one'))
+      And('the task "The model" exists in "one"', createIn('The model', 'one'))
+      And('the task "Groundwork" exists in "two"', createIn('Groundwork', 'two'))
+      And('the task "The view" exists in "two"', createIn('The view', 'two'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      And('"The view" is made to wait for "Groundwork"', waitFor('The view', 'Groundwork'))
+      When('I ask for the edges in "one"', () => {
+        edges = tasks.dependenciesIn(projects.get('one') as string)
+      })
+      Then('there is 1 edge', () => {
+        expect(edges).toEqual([{ taskId: idOf('The model'), dependsOn: idOf('Scaffold') }])
+      })
+    })
+
+    RuleScenario('A project\'s edges are read together', ({ Given, And, When, Then }) => {
+      Given('the project "one" exists', addProject('one'))
+      And('the task "Scaffold" exists in "one"', createIn('Scaffold', 'one'))
+      And('the task "The model" exists in "one"', createIn('The model', 'one'))
+      And('"The model" is made to wait for "Scaffold"', waitFor('The model', 'Scaffold'))
+      When('I ask for the edges in "one"', () => {
+        edges = tasks.dependenciesIn(projects.get('one') as string)
+      })
+      Then('there is 1 edge', () => {
+        expect(edges).toEqual([{ taskId: idOf('The model'), dependsOn: idOf('Scaffold') }])
+      })
     })
   })
 })

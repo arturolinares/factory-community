@@ -404,4 +404,30 @@ export const MIGRATIONS: readonly Migration[] = [
       `)
     },
   },
+  {
+    version: 15,
+    describe: 'one task waiting for another',
+    up: (db) => {
+      // A table rather than a column, because this is asked in both directions:
+      // "what blocks me" for the gate, and "what do I block" for the board. A
+      // JSON column — the shape `projects.granted_directories` takes — is right
+      // for a small set always read whole with its owner, and wrong here.
+      //
+      // `ON DELETE CASCADE` on both sides. An edge naming a task that has been
+      // deleted is a dependency nothing can ever satisfy, and the dependent
+      // would wait for a row nobody can find.
+      //
+      // The reverse index is for the board: it draws "what is waiting for this"
+      // on a task page, which is a lookup by blocker.
+      db.exec(`
+        CREATE TABLE task_dependencies (
+          task_id       TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          depends_on_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          PRIMARY KEY (task_id, depends_on_id)
+        );
+        CREATE INDEX task_dependencies_by_blocker
+          ON task_dependencies(depends_on_id);
+      `)
+    },
+  },
 ]

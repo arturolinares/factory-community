@@ -3,11 +3,13 @@ import type { EventBus } from '@factory/events'
 import {
   applyAction,
   availableActions,
+  queueOrder,
   taskDirectory,
   type AvailableAction,
   type Task,
   type TaskWorkflowEntry,
   type TaskAction,
+  type TaskEdge,
   type TaskState,
 } from '@factory/core'
 import type { Database } from './sqlite.js'
@@ -154,19 +156,35 @@ export class TaskRepository {
     return row === undefined ? undefined : this.#hydrate(row)
   }
 
-  /** Tasks in a state, queue order first, then oldest first. */
-  list(options: { state?: TaskState; includeArchived?: boolean } = {}): Task[] {
-    const rows =
-      options.state !== undefined
-        ? this.#db.all<TaskRow>(
-            'SELECT * FROM tasks WHERE state = ? ORDER BY queue_position, created_at',
-            options.state,
-          )
-        : this.#db.all<TaskRow>(
-            options.includeArchived === true
-              ? 'SELECT * FROM tasks ORDER BY queue_position, created_at'
-              : "SELECT * FROM tasks WHERE state <> 'archived' ORDER BY queue_position, created_at",
-          )
+  /**
+   * Tasks in a state, queue order first, then oldest first.
+   *
+   * Built up from clauses rather than as three literal statements. That was the
+   * shape before `projectId`, and adding a third dimension to it would have
+   * meant six statements and the wrong one being edited.
+   */
+  list(
+    options: { state?: TaskState; includeArchived?: boolean; projectId?: string } = {},
+  ): Task[] {
+    const where: string[] = []
+    const values: (string | number)[] = []
+
+    if (options.state !== undefined) {
+      where.push('state = ?')
+      values.push(options.state)
+    } else if (options.includeArchived !== true) {
+      where.push("state <> 'archived'")
+    }
+    if (options.projectId !== undefined) {
+      where.push('project_id = ?')
+      values.push(options.projectId)
+    }
+
+    const rows = this.#db.all<TaskRow>(
+      `SELECT * FROM tasks${where.length === 0 ? '' : ` WHERE ${where.join(' AND ')}`}` +
+        ' ORDER BY queue_position, created_at',
+      ...values,
+    )
     return rows.map((row) => this.#hydrate(row))
   }
 
@@ -451,6 +469,137 @@ export class TaskRepository {
       .map((row) => row.flag)
   }
 
+  /** The tasks this one is waiting for, oldest edge first. */
+  dependsOn(id: string): string[] {
+    return this.#db
+      .all<{ depends_on_id: string }>(
+        'SELECT depends_on_id FROM task_dependencies WHERE task_id = ? ORDER BY rowid',
+        id,
+      )
+      .map((row) => row.depends_on_id)
+  }
+
+  /** Every edge among a project's tasks, for ordering a batch or drawing a graph. */
+  dependenciesIn(projectId: string): TaskEdge[] {
+    return this.#db
+      .all<{ task_id: string; depends_on_id: string }>(
+        `SELECT d.task_id, d.depends_on_id
+           FROM task_dependencies d
+           JOIN tasks t ON t.id = d.task_id
+          WHERE t.project_id = ?
+          ORDER BY d.rowid`,
+        projectId,
+      )
+      .map((row) => ({ taskId: row.task_id, dependsOn: row.depends_on_id }))
+  }
+
+  /**
+   * Make one task wait for another.
+   *
+   * Three refusals, all at the door rather than at the moment the graph is
+   * walked. A graph Factory wrote is a graph Factory can order, which is what
+   * lets `queueOrder` treat a ring as corruption rather than as an ordinary
+   * outcome to design around.
+   *
+   * Adding an edge twice is not an error — it is what pressing the button twice
+   * looks like.
+   */
+  dependOn(id: string, blockerId: string): Task {
+    return this.#db.transaction(() => {
+      const task = this.get(id)
+      if (task === undefined) throw new Error(`No task ${id}.`)
+      const blocker = this.get(blockerId)
+      if (blocker === undefined) throw new Error(`No task ${blockerId}.`)
+
+      if (id === blockerId) {
+        throw new Error(`"${task.name}" cannot depend on itself.`)
+      }
+      // Ids, so this compares what the graph is keyed by. Both undefined — two
+      // tasks belonging to no project — counts as the same project: they are
+      // equally unowned, and refusing would make dependencies impossible for
+      // anyone not using projects yet.
+      if (task.projectId !== blocker.projectId) {
+        throw new Error(
+          `"${task.name}" and "${blocker.name}" are in different projects, ` +
+            `and a dependency between projects has no owner.`,
+        )
+      }
+
+      // Checked here because this is the only place an edge is added, so the
+      // stored graph is acyclic by construction. Walked with the edge already
+      // hypothetically in place.
+      const edges = [
+        ...this.#allEdges(),
+        { taskId: id, dependsOn: blockerId },
+      ]
+      // Every node in the graph, not just this task: `queueOrder` follows only
+      // the edges inside the set it is given, so ordering `[id]` alone would
+      // walk straight past a ring three tasks long.
+      const nodes = new Set<string>()
+      for (const edge of edges) {
+        nodes.add(edge.taskId)
+        nodes.add(edge.dependsOn)
+      }
+      const ring = queueOrder([...nodes], edges).problems.find(
+        (problem) => problem.rule === 'dependencies.cycle',
+      )
+      // The message names the pair rather than the chain, because any ring
+      // found here is the one just proposed: nothing else writes an edge, so
+      // the rest of the graph was already acyclic when it went in.
+      if (ring !== undefined) {
+        throw new Error(
+          `"${task.name}" cannot wait for "${blocker.name}": that would make a ring, ` +
+            `because "${blocker.name}" already waits for "${task.name}", however far around.`,
+        )
+      }
+
+      this.#db.run(
+        `INSERT INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)
+         ON CONFLICT(task_id, depends_on_id) DO NOTHING`,
+        id,
+        blockerId,
+      )
+      this.#db.run('UPDATE tasks SET updated_at = ? WHERE id = ?', this.#now(), id)
+      // The same event any other change to a task emits. A dependency decides
+      // when work starts, which is a fact about the task worth waking a board
+      // for — and inventing an event name would mean widening the browser's
+      // hard-coded list as well.
+      this.#events?.emit('task.assigned', {
+        taskId: id,
+        workflows: task.workflows.map((entry) => entry.workflow),
+      })
+      return this.get(id) as Task
+    })
+  }
+
+  /** Stop one task waiting for another. Removing an edge that is not there is not an error. */
+  independ(id: string, blockerId: string): Task {
+    return this.#db.transaction(() => {
+      const task = this.get(id)
+      if (task === undefined) throw new Error(`No task ${id}.`)
+      this.#db.run(
+        'DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?',
+        id,
+        blockerId,
+      )
+      this.#db.run('UPDATE tasks SET updated_at = ? WHERE id = ?', this.#now(), id)
+      this.#events?.emit('task.assigned', {
+        taskId: id,
+        workflows: task.workflows.map((entry) => entry.workflow),
+      })
+      return this.get(id) as Task
+    })
+  }
+
+  /** Every edge there is. Only the ring check needs this, and only per write. */
+  #allEdges(): TaskEdge[] {
+    return this.#db
+      .all<{ task_id: string; depends_on_id: string }>(
+        'SELECT task_id, depends_on_id FROM task_dependencies ORDER BY rowid',
+      )
+      .map((row) => ({ taskId: row.task_id, dependsOn: row.depends_on_id }))
+  }
+
   /**
    * Record what a workflow earned and what it invalidated.
    *
@@ -578,6 +727,7 @@ export class TaskRepository {
         ran: entry.ran === 1,
       }))
     const flags = this.flags(row.id)
+    const dependsOn = this.dependsOn(row.id)
 
     // Built by assignment rather than spreading nulls: an absent optional and
     // one explicitly set to undefined are different types here, and the
@@ -589,6 +739,7 @@ export class TaskRepository {
       state: row.state as TaskState,
       workflows,
       flags,
+      dependsOn,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }

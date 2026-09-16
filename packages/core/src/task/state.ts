@@ -91,6 +91,18 @@ export interface Task {
    * whatever the workflows in use declare. Set by the workflows that earn them.
    */
   readonly flags: readonly string[]
+  /**
+   * Tasks this one cannot start until they are done.
+   *
+   * Ids, not names: a task can be renamed and the graph must not move with it.
+   * Always the same project — a cross-project graph has no owner, and the
+   * controls that act on it are project-level.
+   *
+   * Whether they are *satisfied* is not stored. It is derived from their states
+   * by `dependencyStatus`, so the scheduler and the board share one answer
+   * rather than keeping two that can disagree.
+   */
+  readonly dependsOn: readonly string[]
   /** Ordering within the queue. Null when not queued. */
   readonly queuePosition?: number
   /**

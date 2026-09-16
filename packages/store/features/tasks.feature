@@ -307,3 +307,123 @@ Feature: A task, and the rules about how it moves
       When a task is created asking for the directory "shared"
       # They would otherwise share a worktree and an artifacts root.
       Then its directory is "shared-2"
+
+  Rule: A task can be made to wait for another in the same project
+
+    The edge is checked at the door, not when the graph is walked: a graph
+    Factory wrote is a graph Factory can order, which is what lets the ordering
+    treat a ring as corruption rather than as an ordinary outcome to design
+    around.
+
+    Ids rather than names, so renaming a task does not move the graph.
+
+    Scenario: A new task waits for nothing
+      Given the task "Add due dates" exists
+      Then it waits for nothing
+
+    Scenario: One task is made to wait for another
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      When "The model" is made to wait for "Scaffold"
+      Then "The model" waits for "Scaffold"
+      And "Scaffold" waits for nothing
+
+    Scenario: The same edge twice is one edge
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "The model" is made to wait for "Scaffold" again
+      # What pressing the button twice looks like.
+      Then "The model" waits for exactly 1 task
+
+    Scenario: The edge can be taken back
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "The model" stops waiting for "Scaffold"
+      Then "The model" waits for nothing
+
+    Scenario: Taking back an edge that is not there is not an error
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      When "The model" stops waiting for "Scaffold"
+      Then "The model" waits for nothing
+
+    Scenario: A task cannot wait for itself
+      Given the task "Scaffold" exists
+      When "Scaffold" is made to wait for "Scaffold"
+      Then it is refused
+      # In its own words, not as a ring one hop long: the ring check would
+      # catch this too, and would explain it with "already waits for", which is
+      # not what happened.
+      And the refusal says it cannot depend on itself
+
+    Scenario: A task cannot wait for one in another project
+      Given the project "one" exists
+      And the project "two" exists
+      And the task "Scaffold" exists in "one"
+      And the task "The model" exists in "two"
+      When "The model" is made to wait for "Scaffold"
+      # A dependency between projects has no owner, and the controls that act
+      # on the graph are project-level.
+      Then it is refused
+      And the refusal says they are in different projects
+
+    Scenario: A task cannot wait for one that is not there
+      Given the task "The model" exists
+      When "The model" is made to wait for a task that does not exist
+      Then it is refused
+
+    Scenario: An edge that would make a ring is refused
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "Scaffold" is made to wait for "The model"
+      Then it is refused
+      And the refusal says it would make a ring
+
+    Scenario: A longer ring is refused too
+      Given the task "One" exists
+      And the task "Two" exists
+      And the task "Three" exists
+      And "Two" is made to wait for "One"
+      And "Three" is made to wait for "Two"
+      When "One" is made to wait for "Three"
+      Then it is refused
+      And the refusal says it would make a ring
+
+    Scenario: Deleting the waiting task removes the edge
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "The model" is deleted
+      Then no dependency rows are left
+
+    Scenario: Deleting the blocker removes the edge
+      Given the task "Scaffold" exists
+      And the task "The model" exists
+      And "The model" is made to wait for "Scaffold"
+      When "Scaffold" is deleted
+      # An edge naming a task nobody can find is a dependency nothing can ever
+      # satisfy, so it must not outlive either end.
+      Then no dependency rows are left
+
+    Scenario: A project's edges are read together
+      Given the project "one" exists
+      And the task "Scaffold" exists in "one"
+      And the task "The model" exists in "one"
+      And "The model" is made to wait for "Scaffold"
+      When I ask for the edges in "one"
+      Then there is 1 edge
+
+    Scenario: Another project's edges are left out
+      Given the project "one" exists
+      And the project "two" exists
+      And the task "Scaffold" exists in "one"
+      And the task "The model" exists in "one"
+      And the task "Groundwork" exists in "two"
+      And the task "The view" exists in "two"
+      And "The model" is made to wait for "Scaffold"
+      And "The view" is made to wait for "Groundwork"
+      When I ask for the edges in "one"
+      Then there is 1 edge
