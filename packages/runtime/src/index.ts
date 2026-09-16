@@ -41,6 +41,22 @@ export interface Runtime {
   /** Non-fatal problems from startup, e.g. a plugin that would not load. */
   readonly startupProblems: readonly Problem[]
   /**
+   * Problems noticed while running, rather than while starting.
+   *
+   * There has to be somewhere for one to go. The scheduler used to drop a
+   * failure it could not attribute to a task — which is exactly how "cancel
+   * does not cancel" stayed invisible for sixteen increments: the engine's
+   * next transition threw, the task had already settled, and nothing was
+   * written down anywhere at all.
+   *
+   * Served beside `startupProblems` by `GET /api/doctor`, so the place a person
+   * already looks is the place it appears. Bounded, because an unbounded list
+   * of problems in a long-running process is its own problem.
+   */
+  readonly problems: readonly Problem[]
+  /** Write one down. */
+  recordProblem(problem: Problem): void
+  /**
    * Everything Factory knows how to load, with what is switched off marked
    * rather than missing.
    *
@@ -145,6 +161,9 @@ export async function createRuntime(options: {
   })
 
   let plugins = [...loaded.catalogue]
+  /** Most recent last, oldest dropped. A daemon runs for weeks. */
+  const recorded: Problem[] = []
+  const PROBLEM_LIMIT = 100
 
   return {
     chain,
@@ -153,6 +172,13 @@ export async function createRuntime(options: {
     env: options.env,
     cwd: options.cwd,
     startupProblems: [...settings.problems, ...loaded.problems],
+    get problems() {
+      return recorded
+    },
+    recordProblem: (problem) => {
+      recorded.push(problem)
+      if (recorded.length > PROBLEM_LIMIT) recorded.splice(0, recorded.length - PROBLEM_LIMIT)
+    },
     get plugins() {
       return plugins
     },

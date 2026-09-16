@@ -483,3 +483,49 @@ Feature: Turning a task into runs
       # The agent asked to diagnose a failure wants the conversation that
       # produced it, not a fresh one.
       Then the recovery plan was told "session-1" already exists
+
+  Rule: cancelling a task stops what it is doing
+
+    It did not. Cancelling flipped a row: the agent ran to completion, the
+    engine's next transition threw `TransitionError` because `complete` has no
+    edge from `cancelled`, the scheduler swallowed that because the task was no
+    longer running, and the run row said `running` until the next daemon boot
+    corrected it to "Factory stopped while this was running."
+
+    `RunState 'cancelled'` was declared and written by nothing. It has a writer
+    now, and the three reasons it could not work — no handle on the child, no
+    process group, no attempt at shutdown — are gone.
+
+    Scenario: Cancelling a running task stops its process and records it
+      Given the workflow "long" whose phase runs for a long time
+      And it is the task's only workflow
+      And the task is queued
+      When the task is cancelled while it is running
+      Then the run is recorded as cancelled
+      And the task is cancelled
+      And nothing is left running
+      And no error was raised
+
+    Scenario: Cancelling through the store reaches the engine
+      Given the workflow "long" whose phase runs for a long time
+      And it is the task's only workflow
+      And the task is queued
+      When the task is cancelled through the store while it is running
+      # The route only changes the state; the engine notices. So the API, the
+      # CLI and a future desktop menu item cannot differ about what cancelling
+      # actually does.
+      Then the run is recorded as cancelled
+      And nothing is left running
+
+    Scenario: Cancelling a task that is doing nothing is not an error
+      When the task is cancelled before anything runs
+      Then nothing was signalled
+
+    Scenario: Stopping everything cancels the tasks it stopped
+      Given the workflow "long" whose phase runs for a long time
+      And it is the task's only workflow
+      And the task is queued
+      When everything is stopped while it is running
+      Then the run is recorded as cancelled
+      And the task is cancelled
+      And the reason is recorded against the task

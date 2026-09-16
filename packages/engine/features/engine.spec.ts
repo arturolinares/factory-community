@@ -4,12 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect } from 'vitest'
 import { fileURLToPath } from 'node:url'
+import { EventBus } from '@factory/events'
 import type { FailureContext } from '@factory/engine'
 import type {
   Approval,
   PlanResult,
   ResolvedPhase,
   ResolvedPlan,
+  StopReport,
   Run,
   Task,
 } from '@factory/core'
@@ -20,6 +22,7 @@ const feature = await loadFeature(fileURLToPath(new URL('./engine.feature', impo
 
 describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => {
   let store: Store
+  let bus: EventBus
   let tasks: TaskRepository
   let runs: RunRepository
   let engine: Engine
@@ -57,7 +60,13 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       store = openStore({ file: ':memory:', migrations: MIGRATIONS })
       // Monotonic: entry ids are minted from here too, so a fixed value would
       // give every workflow in a task the same entry id.
-      tasks = new TaskRepository({ db: store.db, now, newId: () => `task-${++ids}` })
+      bus = new EventBus({ onSubscriberError: () => {} })
+      tasks = new TaskRepository({
+        db: store.db,
+        events: bus,
+        now,
+        newId: () => `task-${++ids}`,
+      })
       runs = new RunRepository({ db: store.db, now, newId: () => `run-${++ids}` })
       engine = buildEngine()
     })
@@ -70,9 +79,12 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
     new Engine({
       tasks,
       runs,
-      // Nothing, deliberately: these scenarios stub `execute`, so an
-      // environment here would only be a value nobody reads.
-      env: {},
+      events: bus,
+      // Curated rather than `process.env`: these scenarios run real commands,
+      // so they need a PATH — and a machine that exports a token should not
+      // change what they observe. It was `{}` for one commit, which worked only
+      // because `echo` is a shell builtin and nothing here needed anything else.
+      env: { PATH: process.env.PATH, HOME: process.env.HOME },
       ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
       // Pinned so "30 seconds from now" is a value the scenario can name.
       now: () => clock,
@@ -1206,6 +1218,116 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       Then('the recovery plan was told "session-1" already exists', () =>
         expect(sessionsSeen.at(-1)).toEqual({ id: 'session-1', started: true }),
       )
+    })
+  })
+
+  Rule('cancelling a task stops what it is doing', ({ RuleScenario }) => {
+    /** Started and deliberately not awaited, so the scenario can act mid-run. */
+    let working: Promise<unknown> | undefined
+    let stopped: StopReport | undefined
+
+    const longPhase = (): void => {
+      // `sleep 30 &` plus `wait` makes the work a grandchild, which is the
+      // shape of every real step and the thing a single-pid kill misses.
+      givePlan('long', [shellPhase('work', 'sleep 30 & wait')])
+    }
+    const startWorking = async (): Promise<void> => {
+      failure = undefined
+      working = engine.run(task.id).catch((error: unknown) => {
+        failure = error
+      })
+      // Until the engine is actually executing: cancelling before it starts
+      // would prove nothing about stopping a process.
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline && engine.running().length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(engine.running(), 'the engine never started the task').toContain(task.id)
+    }
+    const finishWorking = async (): Promise<void> => {
+      await working
+      task = tasks.get(task.id) as Task
+    }
+
+    RuleScenario('Cancelling a running task stops its process and records it', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the workflow "long" whose phase runs for a long time', longPhase)
+      And("it is the task's only workflow", () => assign('long'))
+      And('the task is queued', queue)
+      When('the task is cancelled while it is running', async () => {
+        await startWorking()
+        tasks.act(task.id, 'cancel')
+        stopped = await engine.cancel(task.id)
+        await finishWorking()
+      })
+      Then('the run is recorded as cancelled', () =>
+        expect(allRuns().map((run) => run.state)).toEqual(['cancelled']),
+      )
+      And('the task is cancelled', () => expect(task.state).toBe('cancelled'))
+      And('nothing is left running', () => expect(engine.running()).toEqual([]))
+      And('no error was raised', () => expect(failure).toBeUndefined())
+    })
+
+    RuleScenario('Cancelling through the store reaches the engine', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the workflow "long" whose phase runs for a long time', longPhase)
+      And("it is the task's only workflow", () => assign('long'))
+      And('the task is queued', queue)
+      When('the task is cancelled through the store while it is running', async () => {
+        const unwatch = engine.watch()
+        await startWorking()
+        // Only the state change — no direct call to the engine. This is the
+        // route's whole contribution.
+        tasks.act(task.id, 'cancel')
+        await finishWorking()
+        unwatch()
+      })
+      Then('the run is recorded as cancelled', () =>
+        expect(allRuns().map((run) => run.state)).toEqual(['cancelled']),
+      )
+      And('nothing is left running', () => expect(engine.running()).toEqual([]))
+    })
+
+    RuleScenario('Cancelling a task that is doing nothing is not an error', ({
+      When,
+      Then,
+    }) => {
+      When('the task is cancelled before anything runs', async () => {
+        stopped = await engine.cancel(task.id)
+      })
+      Then('nothing was signalled', () => expect(stopped).toEqual({ signalled: 0, killed: 0 }))
+    })
+
+    RuleScenario('Stopping everything cancels the tasks it stopped', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the workflow "long" whose phase runs for a long time', longPhase)
+      And("it is the task's only workflow", () => assign('long'))
+      And('the task is queued', queue)
+      When('everything is stopped while it is running', async () => {
+        await startWorking()
+        stopped = await engine.stopAll('Factory was shut down.')
+        await finishWorking()
+      })
+      Then('the run is recorded as cancelled', () =>
+        expect(allRuns().map((run) => run.state)).toEqual(['cancelled']),
+      )
+      And('the task is cancelled', () => expect(task.state).toBe('cancelled'))
+      And('the reason is recorded against the task', () => {
+        const history = tasks.history(task.id)
+        expect(history.at(-1)?.detail).toBe('Factory was shut down.')
+      })
     })
   })
 })

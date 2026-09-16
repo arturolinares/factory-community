@@ -108,7 +108,9 @@ export function registerInspectionRoutes(
       doctorContext({ chain: runtime.chain, host: runtime.host, env: runtime.env }),
     )
     return {
-      problems: [...runtime.startupProblems, ...report.problems],
+      // Startup, then what has gone wrong since, then what the rules found.
+      // The middle one used to have nowhere to go.
+      problems: [...runtime.startupProblems, ...runtime.problems, ...report.problems],
       checked: report.checked,
     }
   })

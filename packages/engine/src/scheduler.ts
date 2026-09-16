@@ -77,6 +77,16 @@ export interface SchedulerOptions {
   readonly events?: EventBus
   /** Injected so a waiting task's deadline is testable. */
   readonly now?: () => Date
+  /**
+   * Where a failure goes when there is no task left to record it against.
+   *
+   * There has to be somewhere. A task that settles while the engine is working
+   * on it leaves the engine's next transition throwing, and for sixteen
+   * increments that error was dropped on the floor — which is precisely how
+   * "cancel does not cancel" stayed invisible. Optional, because the default of
+   * doing nothing is what a scenario wants; the daemon supplies one.
+   */
+  readonly onError?: (error: Error) => void
 }
 
 /** What a workflow definition says about how it may be scheduled. */
@@ -152,6 +162,7 @@ export class Scheduler {
   readonly #maxParallel: number
   readonly #events: EventBus | undefined
   readonly #now: () => Date
+  readonly #onError: ((error: Error) => void) | undefined
   readonly #inFlight = new Set<Promise<unknown>>()
   /** Tasks handed over and not yet finished, so a second tick cannot repeat one. */
   readonly #active = new Set<string>()
@@ -167,6 +178,7 @@ export class Scheduler {
     this.#maxParallel = options.maxParallel ?? DEFAULT_MAX_PARALLEL
     this.#events = options.events
     this.#now = options.now ?? (() => new Date())
+    this.#onError = options.onError
   }
 
   /**
@@ -296,9 +308,27 @@ export class Scheduler {
         // A task that cannot even be handed over must not take the scheduler
         // down with it, and must not be left looking busy forever.
         const reason = error instanceof Error ? error.message : String(error)
-        if (this.#tasks.get(task.id)?.state === 'running') {
+        const state = this.#tasks.get(task.id)?.state
+        if (state === 'running') {
           this.#tasks.act(task.id, 'block', { reason })
+          return
         }
+        // Not running any more, so there is nowhere to record it — and until
+        // now that meant the error vanished. That is how "cancel does not
+        // cancel" hid for sixteen increments: the engine's next transition
+        // threw `TransitionError` because `complete` has no edge from
+        // `cancelled`, this branch found the task settled, and nothing was
+        // written down anywhere.
+        //
+        // A task that settled while the engine was working on it is ordinary —
+        // somebody cancelled or deleted it — so that is not worth a noise. Any
+        // other reason is a bug, and a bug with no trace is the expensive kind.
+        if (state === 'cancelled' || state === undefined) return
+        this.#onError?.(
+          new Error(
+            `Working on "${task.name}" failed after it had already become ${state}: ${reason}`,
+          ),
+        )
       })
       .finally(() => {
         this.#active.delete(task.id)

@@ -4,6 +4,12 @@ import type { Problem } from '../problems.js'
 import type { ResolvedPhase, ResolvedPlan, ResolvedStep } from '../plan/resolve.js'
 import { retryPolicy } from '../schema/step.js'
 import { agentEnvironment, withheldMessage } from '../security/environment.js'
+import {
+  processGroup,
+  type ProcessRegistry,
+  STOP_GRACE_MS,
+  type StopSignal,
+} from '../security/processes.js'
 
 /**
  * Running a plan, in the foreground, in one process.
@@ -101,6 +107,15 @@ export interface RunOptions {
   readonly timeoutSeconds?: number
   readonly events?: EventBus
   readonly runId?: string
+  /**
+   * Where to register each step's process so something outside can stop it.
+   *
+   * Without this the handle lives and dies inside one promise closure, which is
+   * why cancelling a run used to flip a row and leave the agent running. Needs
+   * `runId` to key on; a caller that supplies neither gets the old behaviour and
+   * no kill switch, which is what a `--dry-run` and an in-memory run want.
+   */
+  readonly processes?: ProcessRegistry
   /** Injected so a retry delay is testable without waiting for it. */
   readonly wait?: (seconds: number) => Promise<void>
 }
@@ -363,17 +378,37 @@ function runStep(
       // A step that expects input has nobody to provide it. Closing stdin makes
       // it fail fast instead of blocking until the deadline.
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Its own process group, which is what makes stopping it possible at all.
+      // A step is almost always `bash -c '…'`, and the work is a grandchild:
+      // signalling the one pid killed the shell and left `npm test` running.
+      //
+      // Not `unref()`ed, unlike the detached tool launcher — this process is
+      // exactly what the run is waiting for.
+      detached: true,
     })
+
+    // Registered before anything can be awaited, so there is no window in which
+    // a running process is unknown to the thing that stops processes.
+    const target = processGroup(child)
+    const forget =
+      target === undefined || options.runId === undefined
+        ? undefined
+        : options.processes?.add(options.runId, target)
 
     let timedOut = false
     let settled = false
 
     // SIGTERM first so the process can clean up, then SIGKILL if it will not
     // go. A step that ignores both would otherwise hold the run open forever.
+    //
+    // The group, not the pid: a deadline that killed only `bash` left the work
+    // it started running for as long as it liked, and the run reported a
+    // timeout while the machine stayed busy.
     const deadline = setTimeout(() => {
       timedOut = true
-      child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 3000)
+      const stop = target ?? { kill: (signal: StopSignal) => child.kill(signal) }
+      stop.kill('SIGTERM')
+      setTimeout(() => stop.kill('SIGKILL'), STOP_GRACE_MS)
     }, seconds * 1000)
 
     child.stdout?.on('data', (data: Buffer) =>
@@ -387,6 +422,10 @@ function runStep(
       if (settled) return
       settled = true
       clearTimeout(deadline)
+      // Forgotten here rather than where it was stopped: this is the only moment
+      // the process is actually gone, and a pid remembered after that is a pid
+      // the operating system may have given to something else.
+      forget?.()
       resolve(outcome)
     }
 

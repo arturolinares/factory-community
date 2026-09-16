@@ -1,5 +1,6 @@
 import {
   isRunFinished,
+  ProcessRegistry,
   runPlan,
   type Problem,
   type ResolvedPlan,
@@ -8,6 +9,7 @@ import {
   type RunOptions,
   type RunResult,
   type StepState,
+  type StopReport,
   type Task,
   type TaskWorkflowEntry,
   IGNORED_BY_PRODUCT,
@@ -80,6 +82,14 @@ export interface EngineOptions {
    * waiting for somebody to forget.
    */
   readonly env: Readonly<Record<string, string | undefined>>
+  /**
+   * Where each step's process is registered so it can be stopped.
+   *
+   * The engine owns one by default. Injectable because a scenario needs to
+   * drive the grace period without waiting for it, and because the daemon's
+   * shutdown needs the same registry the runs were registered in.
+   */
+  readonly processes?: ProcessRegistry
   readonly events?: EventBus
   /** Seconds a single step may take. Passed through to the runner. */
   readonly timeoutSeconds?: number
@@ -116,7 +126,7 @@ export interface FailureContext {
 }
 
 /** Why the engine stopped working on a task. */
-type Stop = 'finished' | 'blocked' | 'paused' | 'idle'
+type Stop = 'finished' | 'blocked' | 'paused' | 'idle' | 'cancelled'
 
 export class Engine {
   readonly #tasks: TaskRepository
@@ -124,6 +134,25 @@ export class Engine {
   readonly #plan: EngineOptions['plan']
   readonly #execute: (options: RunOptions) => Promise<RunResult>
   readonly #env: Readonly<Record<string, string | undefined>>
+  readonly #processes: ProcessRegistry
+  /**
+   * Runs this engine is executing right now, by task.
+   *
+   * The missing link in the old cancel path: a person cancels a *task*, the
+   * processes are keyed by *run*, and nothing joined the two — so cancelling
+   * flipped a row and left the agent working.
+   */
+  readonly #inFlight = new Map<string, string>()
+  /**
+   * Runs a person stopped while they were running.
+   *
+   * Consulted once the runner returns, because by then the step has exited with
+   * whatever a SIGKILL looks like and the honest reading of that is "cancelled",
+   * not "failed". It also stops the engine attempting `complete` or `block` on a
+   * task that is already `cancelled` — which threw `TransitionError`, and the
+   * scheduler swallowed it because the task was no longer running.
+   */
+  readonly #cancelled = new Set<string>()
   readonly #events: EventBus | undefined
   readonly #timeoutSeconds: number | undefined
   readonly #now: () => Date
@@ -135,6 +164,7 @@ export class Engine {
     this.#plan = options.plan
     this.#execute = options.execute ?? runPlan
     this.#env = options.env
+    this.#processes = options.processes ?? new ProcessRegistry()
     this.#events = options.events
     this.#timeoutSeconds = options.timeoutSeconds
     this.#now = options.now ?? (() => new Date())
@@ -205,6 +235,11 @@ export class Engine {
         )
       }
       const result = await this.#runOne({ task, entry, resuming })
+      // Cleared here rather than in a `finally` inside `#runOne`: this is the
+      // one place every path out of it passes through. A stale entry would have
+      // `stop` signalling a run that has already ended — harmless, but a map
+      // that only grows is a leak nobody notices.
+      this.#inFlight.delete(taskId)
       resuming = undefined
       forced = undefined
       produced.push(result.run)
@@ -224,6 +259,74 @@ export class Engine {
 
     this.#tasks.act(taskId, 'complete')
     return { task: this.#require(taskId), runs: produced, problems }
+  }
+
+  /**
+   * Stop what a task is doing, for real.
+   *
+   * Kills the process group of whatever step is running — SIGTERM, a grace
+   * period, then SIGKILL — and marks the run so that when the runner returns,
+   * the outcome is recorded as cancelled rather than read as a failure.
+   *
+   * Idempotent and safe on a task that is doing nothing: there is then no run
+   * in flight and the report says nothing was signalled, which is the truthful
+   * answer rather than an error.
+   */
+  async cancel(taskId: string): Promise<StopReport> {
+    const runId = this.#inFlight.get(taskId)
+    if (runId === undefined) return { signalled: 0, killed: 0 }
+    this.#cancelled.add(runId)
+    return this.#processes.stop(runId)
+  }
+
+  /**
+   * Stop every agent this engine started, and cancel the tasks they belonged to.
+   *
+   * The kill switch. It terminates process trees rather than asking an agent
+   * nicely, because an agent that is mid-loop is exactly the agent somebody is
+   * trying to stop.
+   *
+   * The task transitions happen here rather than in whatever route called it,
+   * so that the CLI, the API and a desktop menu item cannot differ about what
+   * "stop all" leaves behind.
+   */
+  async stopAll(reason = 'Stopped by request.'): Promise<StopReport> {
+    for (const [taskId, runId] of this.#inFlight) {
+      this.#cancelled.add(runId)
+      const task = this.#tasks.get(taskId)
+      // Only if it is still somewhere `cancel` can reach from. A task that has
+      // moved on in the meantime is not this call's business.
+      if (task !== undefined && this.#tasks.actions(taskId).some((a) => a.action === 'cancel')) {
+        this.#tasks.act(taskId, 'cancel', { reason })
+      }
+    }
+    return this.#processes.stopAll()
+  }
+
+  /** Whether anything is running that could be stopped. */
+  running(): readonly string[] {
+    return [...this.#inFlight.keys()]
+  }
+
+  /**
+   * Stop a task's processes whenever anything cancels it.
+   *
+   * Subscribed rather than called by the cancel route, so that every way of
+   * cancelling — the API, the CLI, a future desktop menu — goes through one
+   * implementation. The route only has to change the state; this notices.
+   *
+   * Deferred to a microtask for the reason the scheduler gives: the transition
+   * is emitted from inside the store's transaction, and doing work there would
+   * open a transaction inside one.
+   */
+  watch(): () => void {
+    if (this.#events === undefined) return () => {}
+    return this.#events.on('task.transitioned', (event) => {
+      if (event.payload.to !== 'cancelled') return
+      queueMicrotask(() => {
+        void this.cancel(event.payload.taskId)
+      })
+    })
   }
 
   async #runOne(input: {
@@ -313,9 +416,12 @@ export class Engine {
     // that is what makes `doctor` and `--dry-run` safe to run.
     this.#prepareArtifacts(plan)
 
+    this.#inFlight.set(task.id, run.id)
+
     const result = await this.#execute({
       plan,
       env: this.#env,
+      processes: this.#processes,
       ...(this.#timeoutSeconds === undefined ? {} : { timeoutSeconds: this.#timeoutSeconds }),
       ...(this.#events === undefined ? {} : { events: this.#events }),
       runId: run.id,
@@ -365,6 +471,15 @@ export class Engine {
       // run instead of guessing an answer.
       onApproval: () => Promise.resolve(false),
     })
+
+    // Checked before anything else is recorded. A cancelled run's steps exited
+    // because they were killed, and reading that as a failure would block a task
+    // somebody had already decided to stop — and then attempt a transition
+    // `cancelled` has no edge for.
+    if (this.#cancelled.delete(run.id)) {
+      this.#runs.finish(run.id, 'cancelled', { detail: 'Stopped on request.' })
+      return { run: this.#runs.get(run.id) as Run, stop: 'cancelled', problems: [] }
+    }
 
     // Collected before the verdict is recorded, so evidence is already there
     // when the task lands in front of a person — which for an approval gate is

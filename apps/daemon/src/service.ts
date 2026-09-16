@@ -230,6 +230,16 @@ export async function createService(
     start: (taskId) => engine.run(taskId),
     workflow,
     project,
+    // Somewhere for a failure to go when the task it belonged to has already
+    // settled. Recorded as a startup problem rather than thrown: the daemon
+    // keeps serving, and `GET /api/doctor` is where somebody looks.
+    onError: (error) => {
+      runtime.recordProblem({
+        severity: 'error',
+        message: error.message,
+        rule: 'engine.workFailedAfterSettling',
+      })
+    },
   })
 
   // Doctor learns about tasks and runs by the same route a plugin would: it
@@ -245,6 +255,10 @@ export async function createService(
   )
 
   const stopWatching = options.autoStart === false ? () => {} : scheduler.watch()
+  // Always watching, even with the scheduler off: cancelling is not scheduling,
+  // and a task cancelled in a test installation should still have its processes
+  // stopped. The engine only acts on a transition to `cancelled`.
+  const stopWatchingCancels = engine.watch()
   if (options.autoStart !== false) scheduler.tick()
 
   return {
@@ -259,6 +273,17 @@ export async function createService(
     reconciliation,
     close: async () => {
       stopWatching()
+      stopWatchingCancels()
+      // Before settling, not after. `scheduler.settle()` waits for in-flight
+      // runs, and a step may have half an hour of deadline left — while
+      // `bin.ts` gives the whole shutdown three seconds before it exits the
+      // process. So a tidy shutdown used to lose that race every time and leave
+      // whatever was running orphaned, with its output going nowhere.
+      //
+      // Stopping first makes settling quick: the steps exit, the runs record
+      // themselves as cancelled, and the store closes on a consistent picture
+      // rather than on rows that say "running" for a process that is gone.
+      await engine.stopAll('Factory was shut down.')
       await scheduler.settle()
       store.close()
     },
