@@ -104,6 +104,20 @@ const descriptorShape = {
   /** Redirected into stdin. Several CLIs hang without this when headless. */
   stdin: z.string().min(1).optional(),
   env: z.record(z.string(), z.string()).default({}),
+  /**
+   * Environment variables this CLI needs even under a confined profile.
+   *
+   * The Default profile withholds anything shaped like a credential, and a
+   * coding agent's own credential is shaped exactly like one — filter
+   * `ANTHROPIC_API_KEY` and every Claude run fails at once. Declared here,
+   * beside the flags, so a new provider brings its own answer instead of
+   * editing a list inside core.
+   *
+   * Names only. Factory never reads the values; it decides whether to pass them
+   * through. And a subscription login keeps its credential in a keychain rather
+   * than the environment, so a short list here is not evidence of a problem.
+   */
+  passEnv: z.array(z.string().min(1)).default([]),
 
   /**
    * True when this descriptor has not been checked against the real CLI.

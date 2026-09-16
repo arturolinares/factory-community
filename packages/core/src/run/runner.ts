@@ -3,6 +3,7 @@ import type { EventBus } from '@factory/events'
 import type { Problem } from '../problems.js'
 import type { ResolvedPhase, ResolvedPlan, ResolvedStep } from '../plan/resolve.js'
 import { retryPolicy } from '../schema/step.js'
+import { agentEnvironment, withheldMessage } from '../security/environment.js'
 
 /**
  * Running a plan, in the foreground, in one process.
@@ -44,6 +45,21 @@ export interface RunResult {
 
 export interface RunOptions {
   readonly plan: ResolvedPlan
+  /**
+   * The environment to build each step's from.
+   *
+   * Required, and handed over rather than read. This module used to spawn with
+   * `{ ...process.env }`, which made it the one thing below an entry point
+   * reaching for the ambient environment — in a codebase where
+   * `PluginContext.env` exists precisely so that nothing does. The practical
+   * cost was that every coding agent Factory started inherited every credential
+   * the daemon had.
+   *
+   * Not optional with a `process.env` fallback, because a fallback is the bug
+   * with a nicer signature: the caller that forgets is the caller that gets the
+   * old behaviour.
+   */
+  readonly env: Readonly<Record<string, string | undefined>>
   /**
    * Output as it arrives. The CLI writes it straight through; the engine files
    * it against the step, which is why the step is an argument — a callback that
@@ -328,9 +344,22 @@ function runStep(
       attempt.retry && step.planned.retryArgs !== undefined
         ? step.planned.retryArgs
         : step.planned.args
+    // The profile decides what the step may see. `step.planned.env` is merged
+    // *after* the filter, so a descriptor's own variables always survive — they
+    // are Factory's, not the machine's.
+    const filtered = agentEnvironment(options.env, {
+      profile: options.plan.profile,
+      ...(step.planned.passEnv === undefined ? {} : { keep: step.planned.passEnv }),
+    })
+    if (filtered.withheld.length > 0) {
+      // Against the step, because that is where somebody debugging "it cannot
+      // reach the registry" will be looking. Names, never values.
+      options.onOutput?.(`${withheldMessage(filtered.withheld)}\n`, 'stderr', step, phase)
+    }
+
     const child = spawn(step.planned.command, [...args], {
       cwd: phase.cwd,
-      env: { ...process.env, ...step.planned.env },
+      env: { ...filtered.env, ...step.planned.env },
       // A step that expects input has nobody to provide it. Closing stdin makes
       // it fail fast instead of blocking until the deadline.
       stdio: ['ignore', 'pipe', 'pipe'],

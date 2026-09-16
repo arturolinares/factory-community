@@ -37,6 +37,11 @@ extraArgs: []
 stdin: /dev/null
 env: {}
 
+# Unverified, like everything else in this descriptor: the CLI is not installed
+# on the machine this was written on. If Codex authenticates some other way,
+# this line is harmless — it permits a variable rather than requiring one.
+passEnv: ['OPENAI_API_KEY']
+
 provisional: true
 provisionalNote: >-
   Install the Codex CLI and run `codex --help`, then correct

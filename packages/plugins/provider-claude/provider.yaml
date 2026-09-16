@@ -63,3 +63,12 @@ stdin: /dev/null
 env:
   # Without this a phase that spawns a background sub-agent is killed at 600s.
   CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0'
+
+# Survives the Default profile's credential filter, which would otherwise
+# withhold it for looking exactly like what it is.
+#
+# One name, because this is the only auth variable `claude --help` documents. A
+# subscription login keeps its credential in the keychain instead, so a machine
+# with nothing here is the ordinary case rather than a misconfiguration — which
+# is why doctor warns and does not refuse.
+passEnv: ['ANTHROPIC_API_KEY']

@@ -71,6 +71,15 @@ export interface EngineOptions {
   }) => PlanResult
   /** Executes a plan. Defaults to the real runner. */
   readonly execute?: (options: RunOptions) => Promise<RunResult>
+  /**
+   * The environment a step's process is built from.
+   *
+   * Passed through to the runner, which filters it according to the plan's
+   * profile. Required for the same reason it is required there: the daemon is
+   * the entry point that has one, and a default would be the old behaviour
+   * waiting for somebody to forget.
+   */
+  readonly env: Readonly<Record<string, string | undefined>>
   readonly events?: EventBus
   /** Seconds a single step may take. Passed through to the runner. */
   readonly timeoutSeconds?: number
@@ -114,6 +123,7 @@ export class Engine {
   readonly #runs: RunRepository
   readonly #plan: EngineOptions['plan']
   readonly #execute: (options: RunOptions) => Promise<RunResult>
+  readonly #env: Readonly<Record<string, string | undefined>>
   readonly #events: EventBus | undefined
   readonly #timeoutSeconds: number | undefined
   readonly #now: () => Date
@@ -124,6 +134,7 @@ export class Engine {
     this.#runs = options.runs
     this.#plan = options.plan
     this.#execute = options.execute ?? runPlan
+    this.#env = options.env
     this.#events = options.events
     this.#timeoutSeconds = options.timeoutSeconds
     this.#now = options.now ?? (() => new Date())
@@ -304,6 +315,7 @@ export class Engine {
 
     const result = await this.#execute({
       plan,
+      env: this.#env,
       ...(this.#timeoutSeconds === undefined ? {} : { timeoutSeconds: this.#timeoutSeconds }),
       ...(this.#events === undefined ? {} : { events: this.#events }),
       runId: run.id,

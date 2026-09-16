@@ -80,6 +80,9 @@ export async function run(
   // Output is written as it arrives rather than collected: watching a build
   // scroll is most of the value of running one in the foreground.
   const result: RunResult = await runPlan({
+    // Handed over, not read: the CLI is an entry point and this is what an
+    // entry point is for.
+    env: context.env,
     plan: planned.plan,
     ...(flags.dryRun === undefined ? {} : { dryRun: flags.dryRun }),
     ...(flags.timeoutSeconds === undefined ? {} : { timeoutSeconds: flags.timeoutSeconds }),

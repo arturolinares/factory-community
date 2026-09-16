@@ -129,6 +129,15 @@ export interface ResolvedPhase {
 
 export interface ResolvedPlan {
   readonly workflow: string
+  /**
+   * How much authority this plan's steps get.
+   *
+   * Carried on the plan rather than passed separately to the runner, because a
+   * plan and the profile it was resolved under belong together: the phase
+   * boundary check above already used it, the runner filters the environment
+   * with it, and the run records it. One value, one source, three readers.
+   */
+  readonly profile: ExecutionProfile
   readonly mode: WorkflowMode
   readonly interval?: number
   /** Iterations before a loop is finished. Absent means until stopped. */
@@ -307,6 +316,7 @@ export function resolvePlan(request: PlanRequest): PlanResult {
   return {
     plan: {
       workflow: workflow.name,
+      profile,
       mode: workflow.mode,
       ...(workflow.interval === undefined ? {} : { interval: workflow.interval }),
       ...(workflow.repeat === undefined ? {} : { repeat: workflow.repeat }),

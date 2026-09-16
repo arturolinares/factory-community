@@ -21,6 +21,15 @@ export interface RenderedCommand {
   /** A file to redirect into stdin; several CLIs hang headless without it. */
   readonly stdin?: string
   /**
+   * Environment variables this CLI needs even under a confined profile.
+   *
+   * Straight off the descriptor. Carried on the rendered command so it travels
+   * with the step to the runner, which is the thing that builds the
+   * environment — the alternative is the runner looking a provider up by name,
+   * and the runner has no business knowing that providers exist.
+   */
+  readonly passEnv?: readonly string[]
+  /**
    * The session this command deals in, when it actually put a flag in for one.
    *
    * Reported rather than inferred. Whether a session flag went into the argv
@@ -145,6 +154,7 @@ export function render(descriptor: ProviderDescriptor, request: RenderRequest): 
     command: descriptor.command,
     args,
     env: descriptor.env,
+    ...(descriptor.passEnv.length === 0 ? {} : { passEnv: descriptor.passEnv }),
     ...(descriptor.stdin === undefined ? {} : { stdin: descriptor.stdin }),
     ...(session.emitted === undefined ? {} : { session: session.emitted }),
   }

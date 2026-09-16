@@ -8,6 +8,7 @@ import { EventBus, type FactoryEvent } from '@factory/events'
 import { runPlan, type RunResult } from '../src/run/runner.js'
 import type { ResolvedPhase, ResolvedPlan } from '../src/plan/resolve.js'
 import type { Approval } from '../src/schema/phase.js'
+import type { ExecutionProfile } from '../src/security/profile.js'
 
 const feature = await loadFeature(fileURLToPath(new URL('./run.feature', import.meta.url)))
 
@@ -44,6 +45,8 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario, AfterEachScenari
   let sandbox: string | undefined
   /** Seconds the runner asked to wait, rather than seconds actually spent. */
   let waited: number[] = []
+  let profile: ExecutionProfile
+  let env: Readonly<Record<string, string | undefined>>
 
   BeforeEachScenario(() => {
     phases = []
@@ -57,6 +60,11 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario, AfterEachScenari
     events = []
     sandbox = undefined
     waited = []
+    profile = 'default'
+    // Curated rather than `process.env`, so a machine that happens to export a
+    // token does not change what these scenarios observe. The three the shell
+    // commands here actually need, and nothing that looks like a credential.
+    env = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG }
   })
   AfterEachScenario(() => {
     if (sandbox !== undefined) rmSync(sandbox, { recursive: true, force: true })
@@ -64,6 +72,7 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario, AfterEachScenari
 
   const plan = (): ResolvedPlan => ({
     workflow: 'test',
+    profile,
     mode,
     scheduling: 'parallel',
     requires,
@@ -77,6 +86,7 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario, AfterEachScenari
     bus.onAny((event) => events.push(event))
     result = await runPlan({
       plan: plan(),
+      env,
       dryRun,
       events: bus,
       wait: async (seconds) => {
@@ -527,6 +537,112 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario, AfterEachScenari
       When('the plan is run', () => execute())
       Then('the run completed', () => expect(result.status).toBe('completed'))
       And('the same command ran twice', () => expect(lines()).toEqual(['again', 'again']))
+    })
+  })
+
+  Rule("the profile decides what a step's process can see", ({ RuleScenario }) => {
+    /**
+     * A step that reports one variable rather than dumping the environment:
+     * the assertion is then about the one name the scenario is written about,
+     * and no value can reach the log.
+     */
+    const reporting = (name: string, needs?: string) => (): void => {
+      const command = `if [ -n "$${name}" ]; then echo "${name} present"; else echo "${name} absent"; fi`
+      phases = [
+        {
+          name: 'build',
+          approval: 'none',
+          cwd: process.cwd(),
+          steps: [
+            {
+              index: 0,
+              uses: 'shell',
+              planned: {
+                describe: command,
+                command: 'bash',
+                args: ['-c', command],
+                ...(needs === undefined ? {} : { passEnv: [needs] }),
+              },
+              raw: { uses: 'shell', run: command },
+            },
+          ],
+        },
+      ]
+    }
+    const alsoHolding = (name: string) => (): void => {
+      env = { ...env, [name]: 'sensitive-value' }
+    }
+
+    RuleScenario('A confined step cannot see a credential', ({ Given, And, When, Then }) => {
+      Given('the environment also holds "GITHUB_TOKEN"', alsoHolding('GITHUB_TOKEN'))
+      And(
+        'a phase "build" that prints whether "GITHUB_TOKEN" is set',
+        reporting('GITHUB_TOKEN'),
+      )
+      When('the plan is run', () => execute())
+      Then('the run completed', () => expect(result.status).toBe('completed'))
+      And('the output says "GITHUB_TOKEN" was absent', () =>
+        expect(output).toContain('GITHUB_TOKEN absent'),
+      )
+    })
+
+    RuleScenario('A confined step can still see its PATH', ({ Given, And, When, Then }) => {
+      Given('the environment also holds "GITHUB_TOKEN"', alsoHolding('GITHUB_TOKEN'))
+      And('a phase "build" that prints whether "PATH" is set', reporting('PATH'))
+      When('the plan is run', () => execute())
+      Then('the run completed', () => expect(result.status).toBe('completed'))
+      And('the output says "PATH" was present', () => expect(output).toContain('PATH present'))
+    })
+
+    RuleScenario("The step's own output says what was withheld", ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the environment also holds "GITHUB_TOKEN"', alsoHolding('GITHUB_TOKEN'))
+      And(
+        'a phase "build" that prints whether "GITHUB_TOKEN" is set',
+        reporting('GITHUB_TOKEN'),
+      )
+      When('the plan is run', () => execute())
+      Then('the output names the withheld "GITHUB_TOKEN"', () => {
+        expect(output).toContain('Factory withheld')
+        expect(output).toContain('GITHUB_TOKEN')
+        expect(output).not.toContain('sensitive-value')
+      })
+    })
+
+    RuleScenario('An unconfined step can see everything', ({ Given, And, When, Then }) => {
+      Given('the plan runs under Full Access', () => {
+        profile = 'full-access'
+      })
+      And('the environment also holds "GITHUB_TOKEN"', alsoHolding('GITHUB_TOKEN'))
+      And(
+        'a phase "build" that prints whether "GITHUB_TOKEN" is set',
+        reporting('GITHUB_TOKEN'),
+      )
+      When('the plan is run', () => execute())
+      Then('the run completed', () => expect(result.status).toBe('completed'))
+      And('the output says "GITHUB_TOKEN" was present', () =>
+        expect(output).toContain('GITHUB_TOKEN present'),
+      )
+      And('the output names nothing withheld', () =>
+        expect(output).not.toContain('Factory withheld'),
+      )
+    })
+
+    RuleScenario('What the provider declared survives', ({ Given, And, When, Then }) => {
+      Given('the environment also holds "ANTHROPIC_API_KEY"', alsoHolding('ANTHROPIC_API_KEY'))
+      And(
+        'a phase "build" that prints whether "ANTHROPIC_API_KEY" is set, needing it',
+        reporting('ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY'),
+      )
+      When('the plan is run', () => execute())
+      Then('the run completed', () => expect(result.status).toBe('completed'))
+      And('the output says "ANTHROPIC_API_KEY" was present', () =>
+        expect(output).toContain('ANTHROPIC_API_KEY present'),
+      )
     })
   })
 })

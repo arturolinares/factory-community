@@ -70,6 +70,9 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
     new Engine({
       tasks,
       runs,
+      // Nothing, deliberately: these scenarios stub `execute`, so an
+      // environment here would only be a value nobody reads.
+      env: {},
       ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
       // Pinned so "30 seconds from now" is a value the scenario can name.
       now: () => clock,
@@ -119,6 +122,7 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
 
   const planOf = (workflow: string, phases: ResolvedPhase[]): ResolvedPlan => ({
     workflow,
+    profile: 'default',
     mode: 'once',
     scheduling: 'sequential',
     requires: [],

@@ -88,10 +88,20 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       // to have running answers instead — and the scenario then describes their
       // machine rather than the empty one it set up. Port 9 is discard; nothing
       // listens there.
+      //
+      // PATH is the two system directories rather than empty. It *was* empty,
+      // and that was decorative: the runner spawned steps with `process.env`,
+      // so `bash` was found through the developer's own PATH and this claim was
+      // untrue for every step that ran. Now the runner is handed this
+      // environment and nothing else, so the scenarios that run a real
+      // workflow need somewhere to find `bash` — and two fixed system
+      // directories keep the isolation the comment above promises, while
+      // `resolveCommand` still finds no agent, which is what the
+      // nothing-installed scenarios depend on.
       env: {
         FACTORY_HOME: userScope,
         FACTORY_URL: 'http://127.0.0.1:9',
-        PATH: '',
+        PATH: '/usr/bin:/bin',
         NO_COLOR: '1',
         ...env,
       },

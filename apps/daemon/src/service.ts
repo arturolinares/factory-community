@@ -146,6 +146,11 @@ export async function createService(
     tasks,
     runs,
     events: runtime.events,
+    // The daemon's own environment, handed to the engine and filtered by the
+    // runner according to each plan's profile. `runtime.env` already reaches
+    // availability probes, task tools and plugin registration; the runner was
+    // the one thing still reading `process.env` for itself.
+    env: runtime.env,
     plan: ({ workflow, task, failure, session }) =>
       planWorkflow({
         chain: chains.for(task.projectId) ?? runtime.chain,

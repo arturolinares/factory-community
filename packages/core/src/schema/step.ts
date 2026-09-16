@@ -112,6 +112,20 @@ export interface PlannedStep {
   /** A file redirected into stdin. */
   readonly stdin?: string
   /**
+   * Environment variables this step needs even under a confined profile.
+   *
+   * The Default profile withholds anything shaped like a credential, and a
+   * coding agent's own credential is shaped exactly like one. A provider
+   * declares the exception in its descriptor and it travels here, so the runner
+   * builds the environment without ever knowing that providers exist.
+   *
+   * Absent on a shell step, deliberately. A project's own test command has no
+   * business needing a registry token under this profile, and if it does, the
+   * withheld names are reported against the step rather than left to be
+   * guessed.
+   */
+  readonly passEnv?: readonly string[]
+  /**
    * argv for a second and later attempt, when the first attempt changed the
    * world in a way that makes running it again wrong.
    *

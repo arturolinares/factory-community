@@ -206,3 +206,48 @@ Feature: Running a plan
       When the plan is run
       Then the run completed
       And the same command ran twice
+
+  Rule: the profile decides what a step's process can see
+
+    The filter itself is specified in `agent-environment.feature`. This is the
+    other half, and the half that actually protects anybody: that the spawn uses
+    it. A correct filter the runner does not call is exactly the shape of
+    failure this codebase keeps paying for — a field that validates and lies.
+
+    Scenario: A confined step cannot see a credential
+      Given the environment also holds "GITHUB_TOKEN"
+      And a phase "build" that prints whether "GITHUB_TOKEN" is set
+      When the plan is run
+      Then the run completed
+      And the output says "GITHUB_TOKEN" was absent
+
+    Scenario: A confined step can still see its PATH
+      Given the environment also holds "GITHUB_TOKEN"
+      And a phase "build" that prints whether "PATH" is set
+      When the plan is run
+      Then the run completed
+      And the output says "PATH" was present
+
+    Scenario: The step's own output says what was withheld
+      Given the environment also holds "GITHUB_TOKEN"
+      And a phase "build" that prints whether "GITHUB_TOKEN" is set
+      When the plan is run
+      # Filed against the step, because that is where somebody debugging "it
+      # cannot reach the registry" will be looking.
+      Then the output names the withheld "GITHUB_TOKEN"
+
+    Scenario: An unconfined step can see everything
+      Given the plan runs under Full Access
+      And the environment also holds "GITHUB_TOKEN"
+      And a phase "build" that prints whether "GITHUB_TOKEN" is set
+      When the plan is run
+      Then the run completed
+      And the output says "GITHUB_TOKEN" was present
+      And the output names nothing withheld
+
+    Scenario: What the provider declared survives
+      Given the environment also holds "ANTHROPIC_API_KEY"
+      And a phase "build" that prints whether "ANTHROPIC_API_KEY" is set, needing it
+      When the plan is run
+      Then the run completed
+      And the output says "ANTHROPIC_API_KEY" was present

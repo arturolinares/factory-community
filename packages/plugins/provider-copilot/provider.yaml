@@ -49,3 +49,13 @@ extraArgs: ['--no-color', '--no-ask-user', '--log-level', 'none']
 
 stdin: /dev/null
 env: {}
+
+# Survives the Default profile's credential filter. Both spellings, because the
+# CLI and `gh` disagree about which one they read and a descriptor that named
+# only one would authenticate on some machines and not others.
+#
+# Note what this necessarily allows: a Copilot step can reach GitHub with the
+# user's own token, so pushing from inside that step is possible. That is the
+# cost of the provider needing the credential at all, and it is written down in
+# docs/security/providers.md rather than implied.
+passEnv: ['GH_TOKEN', 'GITHUB_TOKEN']
