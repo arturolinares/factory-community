@@ -661,3 +661,27 @@ Feature: Tasks, runs and live updates over HTTP
       When I run the tool "diffity"
       Then the response is 500
       And the response explains why
+
+  Rule: a client chooses a task's name, never a path
+
+    `POST /api/tasks` accepts a `directory`, and that value is not a label. It
+    becomes the task's worktree name, its artifacts root, and — through
+    `workspaceFor` — the directory the agent process itself runs in. It used to
+    be stored exactly as sent.
+
+    The route forwards it to the store, which slugs it, so this asserts the
+    route has not grown a way around that.
+
+    Scenario: A directory sent by a client is slugged
+      When I create the task "Add due dates" asking for the directory "Add Due Dates"
+      Then the task's directory is "add-due-dates"
+
+    Scenario: A directory sent by a client cannot climb out of the worktrees root
+      When I create the task "Add due dates" asking for the directory "../../escape"
+      Then the task's directory is "escape"
+      And the task's directory is a single path segment
+
+    Scenario: An absolute directory sent by a client cannot restart the path
+      When I create the task "Add due dates" asking for the directory "/etc/passwd"
+      Then the task's directory is "etc-passwd"
+      And the task's directory is a single path segment

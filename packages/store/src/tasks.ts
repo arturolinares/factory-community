@@ -114,7 +114,18 @@ export class TaskRepository {
   create(input: CreateTask): Task {
     const now = this.#now()
     const id = this.#newId()
-    const directory = input.directory ?? this.#freeDirectory(taskDirectory(input.name))
+    // Slugged whether it was supplied or derived, and then made unique.
+    //
+    // A supplied one used to be stored verbatim, and it arrives from a client:
+    // `POST /api/tasks {"directory": "../../escape"}` became the worktree path,
+    // the artifacts root, and the directory the agent itself runs in. The
+    // guarantee worth having is structural rather than a list of bad inputs —
+    // `taskDirectory` maps everything outside `[a-z0-9]` to a dash, so the
+    // result is a single path segment and cannot climb out of anything.
+    //
+    // `#freeDirectory` now covers the supplied case too: two tasks sharing a
+    // directory would share a worktree and an artifacts root.
+    const directory = this.#freeDirectory(taskDirectory(input.directory ?? input.name))
 
     return this.#db.transaction(() => {
       this.#db.run(

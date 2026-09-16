@@ -558,4 +558,77 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       Then('it fails', () => expect(failure).toBeInstanceOf(Error))
     })
   })
+
+  Rule('A task\'s directory is a single path segment, whoever chose it', ({ RuleScenario }) => {
+    const created = (name: string, directory?: string) => (): void => {
+      task = tasks.create({ name, ...(directory === undefined ? {} : { directory }) })
+    }
+    const directoryIs = (expected: string) => (): void => {
+      expect(task?.directory).toBe(expected)
+    }
+    const noSeparator = (): void => {
+      expect(task?.directory).not.toContain('/')
+      expect(task?.directory).not.toContain('\\')
+      expect(task?.directory).not.toContain('..')
+    }
+
+    RuleScenario('A directory derived from the name is slugged', ({ When, Then }) => {
+      When('a task called "Add due dates" is created', created('Add due dates'))
+      Then('its directory is "add-due-dates"', directoryIs('add-due-dates'))
+    })
+
+    RuleScenario('A supplied directory is slugged too', ({ When, Then }) => {
+      When(
+        'a task is created asking for the directory "Add Due Dates"',
+        created('Add due dates', 'Add Due Dates'),
+      )
+      Then('its directory is "add-due-dates"', directoryIs('add-due-dates'))
+    })
+
+    RuleScenario('A supplied directory cannot climb out', ({ When, Then, And }) => {
+      When(
+        'a task is created asking for the directory "../../escape"',
+        created('Add due dates', '../../escape'),
+      )
+      Then('its directory is "escape"', directoryIs('escape'))
+      And('its directory contains no separator', noSeparator)
+    })
+
+    RuleScenario('An absolute supplied directory cannot restart the path', ({
+      When,
+      Then,
+      And,
+    }) => {
+      When(
+        'a task is created asking for the directory "/etc/passwd"',
+        created('Add due dates', '/etc/passwd'),
+      )
+      Then('its directory is "etc-passwd"', directoryIs('etc-passwd'))
+      And('its directory contains no separator', noSeparator)
+    })
+
+    RuleScenario('A supplied directory that slugs away still gets a name', ({ When, Then }) => {
+      When(
+        'a task is created asking for the directory "../.."',
+        created('Add due dates', '../..'),
+      )
+      Then('its directory is "task"', directoryIs('task'))
+    })
+
+    RuleScenario('Two tasks never share a directory, even when both ask for one', ({
+      Given,
+      When,
+      Then,
+    }) => {
+      Given(
+        'a task is created asking for the directory "shared"',
+        created('First task', 'shared'),
+      )
+      When(
+        'a task is created asking for the directory "shared"',
+        created('Second task', 'shared'),
+      )
+      Then('its directory is "shared-2"', directoryIs('shared-2'))
+    })
+  })
 })

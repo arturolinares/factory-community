@@ -265,3 +265,45 @@ Feature: A task, and the rules about how it moves
     Scenario: A session for a task that is not there is an error
       When the session "s-1" is recorded for a task that does not exist
       Then it fails
+
+  Rule: A task's directory is a single path segment, whoever chose it
+
+    The directory is not only a label. It is the task's worktree name, its
+    artifacts root, and — through `workspaceFor` — the directory the agent
+    process itself runs in. It also arrives over HTTP, because
+    `POST /api/tasks` accepts one.
+
+    So it is slugged whether it was supplied or derived from the name. The
+    guarantee is structural rather than a list of inputs to reject: everything
+    outside `a-z0-9` becomes a dash, so the result is one path segment and
+    there is nothing left to climb out with.
+
+    Scenario: A directory derived from the name is slugged
+      When a task called "Add due dates" is created
+      Then its directory is "add-due-dates"
+
+    Scenario: A supplied directory is slugged too
+      When a task is created asking for the directory "Add Due Dates"
+      Then its directory is "add-due-dates"
+
+    Scenario: A supplied directory cannot climb out
+      When a task is created asking for the directory "../../escape"
+      # Not "rejected": the separators simply cannot survive the slug, which is
+      # a stronger claim than a validation rule somebody has to keep current.
+      Then its directory is "escape"
+      And its directory contains no separator
+
+    Scenario: An absolute supplied directory cannot restart the path
+      When a task is created asking for the directory "/etc/passwd"
+      Then its directory is "etc-passwd"
+      And its directory contains no separator
+
+    Scenario: A supplied directory that slugs away still gets a name
+      When a task is created asking for the directory "../.."
+      Then its directory is "task"
+
+    Scenario: Two tasks never share a directory, even when both ask for one
+      Given a task is created asking for the directory "shared"
+      When a task is created asking for the directory "shared"
+      # They would otherwise share a worktree and an artifacts root.
+      Then its directory is "shared-2"

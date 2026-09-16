@@ -1903,4 +1903,53 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       )
     })
   })
+
+  Rule('a client chooses a task\'s name, never a path', ({ RuleScenario }) => {
+    const createWithDirectory = (name: string, directory: string) => async (): Promise<void> => {
+      await call('POST', '/api/tasks', { name, directory })
+      taskId = (response.body.task as { id: string }).id
+    }
+    const directoryIs = (expected: string) => (): void => {
+      expect((response.body.task as { directory: string }).directory).toBe(expected)
+    }
+    const oneSegment = (): void => {
+      const directory = (response.body.task as { directory: string }).directory
+      expect(directory).not.toContain('/')
+      expect(directory).not.toContain('..')
+    }
+
+    RuleScenario('A directory sent by a client is slugged', ({ When, Then }) => {
+      When(
+        'I create the task "Add due dates" asking for the directory "Add Due Dates"',
+        createWithDirectory('Add due dates', 'Add Due Dates'),
+      )
+      Then('the task\'s directory is "add-due-dates"', directoryIs('add-due-dates'))
+    })
+
+    RuleScenario("A directory sent by a client cannot climb out of the worktrees root", ({
+      When,
+      Then,
+      And,
+    }) => {
+      When(
+        'I create the task "Add due dates" asking for the directory "../../escape"',
+        createWithDirectory('Add due dates', '../../escape'),
+      )
+      Then('the task\'s directory is "escape"', directoryIs('escape'))
+      And("the task's directory is a single path segment", oneSegment)
+    })
+
+    RuleScenario('An absolute directory sent by a client cannot restart the path', ({
+      When,
+      Then,
+      And,
+    }) => {
+      When(
+        'I create the task "Add due dates" asking for the directory "/etc/passwd"',
+        createWithDirectory('Add due dates', '/etc/passwd'),
+      )
+      Then('the task\'s directory is "etc-passwd"', directoryIs('etc-passwd'))
+      And("the task's directory is a single path segment", oneSegment)
+    })
+  })
 })
