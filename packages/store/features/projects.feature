@@ -120,3 +120,85 @@ Feature: Projects — the repositories Factory works in
     When I turn worktrees off on a project that does not exist
     Then it is refused
 
+
+  Rule: a project says how much authority its runs get, and what else they may reach
+
+    Two fields, two questions. The profile is inherited when unstated, because a
+    project that has never been asked should follow the installation's choice —
+    storing `default` for everyone would freeze every existing project against a
+    setting they never saw.
+
+    The granted directories are what "allow for this project" leaves behind, and
+    they are directories rather than permission classes because a class is not
+    something Factory can honour: it does not mediate the action, the agent's
+    own CLI refuses it, so the only lever is what Factory passes next time.
+
+    Scenario: A new project states no profile
+      Given the project "factory" exists
+      Then it states no profile
+      And it has granted no directories
+
+    Scenario: A profile can be stated and read back
+      Given the project "factory" exists
+      When I set its profile to "full-access"
+      Then its profile is "full-access"
+
+    Scenario: A profile can be cleared back to unstated
+      Given the project "factory" exists
+      And its profile is "full-access"
+      When I clear its profile
+      # Not the same as setting "default": unstated follows the installation,
+      # and that is a position somebody may want to return to.
+      Then it states no profile
+
+    Scenario: Changing the profile is announced
+      Given the project "factory" exists
+      When I set its profile to "full-access"
+      Then a "project.changed" event says so
+
+    Scenario: Setting a profile on a project that is not there is refused
+      When I set the profile of a project that does not exist
+      Then it is refused
+
+    Scenario: A granted directory is remembered
+      Given the project "factory" exists
+      When I grant it the directory "/repos/shared-library"
+      Then its granted directories are "/repos/shared-library"
+
+    Scenario: Granting the same directory twice changes nothing
+      Given the project "factory" exists
+      And it has been granted "/repos/shared-library"
+      When I grant it the directory "/repos/shared-library"
+      # Pressing the button twice is not an error.
+      Then its granted directories are "/repos/shared-library"
+
+    Scenario: Granted directories are kept in order
+      Given the project "factory" exists
+      And it has been granted "/repos/zoo"
+      When I grant it the directory "/repos/aardvark"
+      Then its granted directories are "/repos/aardvark, /repos/zoo"
+
+    Scenario: A relative directory cannot be granted
+      Given the project "factory" exists
+      When I grant it the directory "../shared-library"
+      # It would mean a different directory depending on which task was
+      # running, which is the opposite of what a persistent grant is for.
+      Then it is refused
+
+    Scenario: A granted directory can be taken back
+      Given the project "factory" exists
+      And it has been granted "/repos/shared-library"
+      When I revoke the directory "/repos/shared-library"
+      Then it has granted no directories
+
+    Scenario: A column edited by hand into nonsense reads as no grants
+      Given the project "factory" exists
+      And its granted directories column says "not json"
+      # "None" is the safe direction for a list whose whole purpose is to widen
+      # a boundary, and a project nobody can load is worse than a lost grant.
+      Then it has granted no directories
+
+    Scenario: A profile edited by hand into nonsense reads as unstated
+      Given the project "factory" exists
+      And its profile column says "sort-of-safe"
+      Then it states no profile

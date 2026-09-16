@@ -403,6 +403,15 @@ export class Engine {
             workflowIndex: index,
             entryId: entry.id,
             attempt: this.#runs.attempts(task.id, workflow) + 1,
+            // Off the plan, which is the one place the profile is decided.
+            // Recorded here rather than derived later, because "what authority
+            // did this run have?" has to be answerable after the project
+            // setting has moved on.
+            //
+            // The refused-plan branch above records none, deliberately: nothing
+            // ran, so no authority was granted, and inventing one would be the
+            // only false entry in the table.
+            profile: plan.profile,
           })
 
     // Keyed by where the step is in the plan rather than by "the step running

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
-import { defaultWorktreesRoot, type Project } from '@factory/core'
+import { defaultWorktreesRoot, isExecutionProfile, type ExecutionProfile, type Project } from '@factory/core'
 import type { EventBus } from '@factory/events'
 import type { Database } from './sqlite.js'
 
@@ -23,6 +23,8 @@ interface ProjectRow {
   is_repository: number
   uses_worktrees: number
   uses_environments: number
+  profile: string | null
+  granted_directories: string | null
   created_at: string
 }
 
@@ -195,6 +197,63 @@ export class ProjectRepository {
   }
 
   /**
+   * Say how much authority this project's runs get.
+   *
+   * `undefined` clears it, which is not the same as setting `default`: a
+   * project that states nothing follows the installation's choice, and that is
+   * a position somebody may want to return to.
+   */
+  setProfile(id: string, profile: ExecutionProfile | undefined): Project {
+    const before = this.get(id)
+    if (before === undefined) throw new Error(`No project ${id}.`)
+    this.#db.run('UPDATE projects SET profile = ? WHERE id = ?', profile ?? null, id)
+    const after = this.get(id) as Project
+    // The same event a worktree or environment change emits, in its existing
+    // shape. Its own description is already "a setting changed that decides
+    // where — and how much of — its work runs", and the profile is exactly the
+    // "how much". A second event name, or a wider payload, would mean the
+    // browser's allow-list needing to know about it — and that list is already
+    // a partial copy of the registry.
+    this.#events?.emit('project.changed', {
+      projectId: id,
+      name: after.name,
+      usesWorktrees: after.usesWorktrees,
+      usesEnvironments: after.usesEnvironments,
+    })
+    return after
+  }
+
+  /**
+   * Allow this project's agents one more directory, for good.
+   *
+   * Absolute only, and de-duplicated. A relative path would mean a different
+   * directory depending on which task was running, which is the opposite of
+   * what a persistent grant is for.
+   *
+   * Returns the project whether or not anything changed: granting a directory
+   * twice is what pressing the button twice looks like, and it is not an error.
+   */
+  grantDirectory(id: string, directory: string): Project {
+    const before = this.get(id)
+    if (before === undefined) throw new Error(`No project ${id}.`)
+    if (!isAbsolute(directory)) {
+      throw new Error(`A granted directory has to be absolute: "${directory}".`)
+    }
+    const next = [...new Set([...before.grantedDirectories, resolve(directory)])].sort()
+    this.#db.run('UPDATE projects SET granted_directories = ? WHERE id = ?', JSON.stringify(next), id)
+    return this.get(id) as Project
+  }
+
+  /** Take a granted directory back. */
+  revokeDirectory(id: string, directory: string): Project {
+    const before = this.get(id)
+    if (before === undefined) throw new Error(`No project ${id}.`)
+    const next = before.grantedDirectories.filter((held) => held !== resolve(directory))
+    this.#db.run('UPDATE projects SET granted_directories = ? WHERE id = ?', JSON.stringify(next), id)
+    return this.get(id) as Project
+  }
+
+  /**
    * Forget a project.
    *
    * Its tasks stay. Removing a project from Factory is bookkeeping — the work
@@ -209,6 +268,11 @@ export class ProjectRepository {
 }
 
 function hydrate(row: ProjectRow): Project {
+  // Through the guard, so a value edited into the column by hand is read as
+  // "not stated" rather than resolving to neither profile — which would be
+  // read as inherit-from-the-installation and could silently loosen a project
+  // that had asked to be confined.
+  const profile = isExecutionProfile(row.profile) ? row.profile : undefined
   return {
     id: row.id,
     name: row.name,
@@ -218,6 +282,27 @@ function hydrate(row: ProjectRow): Project {
     isRepository: row.is_repository === 1,
     usesWorktrees: row.uses_worktrees === 1,
     usesEnvironments: row.uses_environments === 1,
+    ...(profile === undefined ? {} : { profile }),
+    grantedDirectories: readDirectories(row.granted_directories),
     createdAt: row.created_at,
+  }
+}
+
+/**
+ * The granted directories, or none.
+ *
+ * Text that will not parse, or parses to something other than a list of
+ * strings, is read as none. The alternative is a project nobody can load
+ * because one row was edited by hand — and "none" is the safe direction for a
+ * list whose whole purpose is to widen a boundary.
+ */
+function readDirectories(raw: string | null): readonly string[] {
+  if (raw === null || raw === '') return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((value): value is string => typeof value === 'string' && value !== '')
+  } catch {
+    return []
   }
 }

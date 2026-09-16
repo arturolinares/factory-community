@@ -48,6 +48,7 @@ const PROJECT: Project = {
   isRepository: true,
   usesWorktrees: false,
   usesEnvironments: false,
+  grantedDirectories: [],
   createdAt: '2026-01-01T00:00:00.000Z',
 }
 

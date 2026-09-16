@@ -1,4 +1,5 @@
 import type { WorkflowConditions } from '../schema/workflow.js'
+import type { ExecutionProfile } from '../security/profile.js'
 /**
  * A project: the repository a piece of work happens in.
  *
@@ -51,6 +52,28 @@ export interface Project {
    * that build one.
    */
   readonly usesEnvironments: boolean
+  /**
+   * How much authority this project's runs get.
+   *
+   * Absent means "not stated", which is not the same as `default`: a project
+   * that has never been asked follows the installation's choice, so changing
+   * that choice changes the projects that never chose. `resolveProfile` is the
+   * one place the order is written.
+   */
+  readonly profile?: ExecutionProfile
+  /**
+   * Directories this project has allowed beyond its workspace, for good.
+   *
+   * What "allow for this project" leaves behind. Directories rather than
+   * permission classes, because a class is not something Factory can honour: it
+   * does not mediate the action — the agent's own CLI refuses it — so the only
+   * lever is what Factory passes next time, and a directory grant is the one
+   * that was measured to work.
+   *
+   * Absolute, and checked before they are stored: a relative one would mean
+   * something different depending on which task was running.
+   */
+  readonly grantedDirectories: readonly string[]
   readonly createdAt: string
 }
 

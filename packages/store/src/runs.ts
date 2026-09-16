@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { EventBus } from '@factory/events'
 import {
+  isExecutionProfile,
   isRunFinished,
   type Evidence,
+  type ExecutionProfile,
   type LogStream,
   type LogView,
   type Run,
@@ -56,6 +58,7 @@ interface RunRow {
   started_at: string
   finished_at: string | null
   detail: string | null
+  profile: string | null
   dropped_bytes: number
 }
 
@@ -113,6 +116,8 @@ export interface StartRun {
    * a resumed run find its own entry and a loop count its own iterations.
    */
   readonly entryId?: string
+  /** How much authority this run is given. Straight off the plan. */
+  readonly profile?: ExecutionProfile
 }
 
 export interface StartStep {
@@ -164,14 +169,15 @@ export class RunRepository {
     }
 
     this.#db.run(
-      `INSERT INTO runs (id, task_id, workflow, state, attempt, workflow_index, entry_id, started_at)
-       VALUES (?, ?, ?, 'running', ?, ?, ?, ?)`,
+      `INSERT INTO runs (id, task_id, workflow, state, attempt, workflow_index, entry_id, profile, started_at)
+       VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
       id,
       input.taskId ?? null,
       input.workflow,
       input.attempt ?? 1,
       input.workflowIndex ?? 0,
       input.entryId ?? null,
+      input.profile ?? null,
       now,
     )
     this.#events?.emit('run.started', { runId: id, workflow: input.workflow })
@@ -629,6 +635,7 @@ function hydrateRun(row: RunRow): Run {
   if (row.resume_phase !== null) run.resumePhase = row.resume_phase
   if (row.finished_at !== null) run.finishedAt = row.finished_at
   if (row.detail !== null) run.detail = row.detail
+  if (isExecutionProfile(row.profile)) run.profile = row.profile
   return run as unknown as Run
 }
 

@@ -1,3 +1,5 @@
+import type { ExecutionProfile } from '../security/profile.js'
+
 /**
  * What a run is, once it is something that outlives the process that ran it.
  *
@@ -66,6 +68,15 @@ export interface Run {
   readonly entryId?: string
   /** Phase to continue from when a paused run is resumed. */
   readonly resumePhase?: number
+  /**
+   * How much authority this run was given.
+   *
+   * Recorded rather than derived. Deriving it later would read today's project
+   * setting and describe a run that happened under a different one — the same
+   * trap `session_provider` was added to avoid. Absent for a run from before
+   * profiles existed, because nothing knew.
+   */
+  readonly profile?: ExecutionProfile
   readonly startedAt: string
   readonly finishedAt?: string
   /** Why it ended the way it did, when that needs saying. */

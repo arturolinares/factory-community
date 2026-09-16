@@ -1,7 +1,7 @@
 import { describeFeature, loadFeature } from '@amiceli/vitest-cucumber'
 import { expect } from 'vitest'
 import { fileURLToPath } from 'node:url'
-import type { LogStream, Run, RunStep, Task } from '@factory/core'
+import type { ExecutionProfile, LogStream, Run, RunStep, Task } from '@factory/core'
 import { MIGRATIONS, RunRepository, TaskRepository, openStore, type Store } from '../src/index.js'
 
 const feature = await loadFeature(fileURLToPath(new URL('./runs.feature', import.meta.url)))
@@ -571,6 +571,40 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       And('a run of "diagnose" stamped with the same entry', () => runFor('diagnose'))
       And('"look" ran in "triage" and succeeded', () => stepIn('look', 'triage', 'completed'))
       Then('no phases have been carried out', () => expect(carried()).toEqual([]))
+    })
+  })
+
+  Rule('a run records the authority it was given', ({ RuleScenario }) => {
+    const startUnder = (profile?: ExecutionProfile) => (): void => {
+      run = runs.start({
+        workflow: 'development',
+        taskId: task.id,
+        ...(profile === undefined ? {} : { profile }),
+      })
+    }
+    const profileIs = (expected: string) => (): void => {
+      expect(run.profile).toBe(expected)
+    }
+
+    RuleScenario('A run carries the profile it was started with', ({ When, Then }) => {
+      When('a run is started under "full-access"', startUnder('full-access'))
+      Then('the run\'s profile is "full-access"', profileIs('full-access'))
+    })
+
+    RuleScenario('A run started without one records none', ({ When, Then }) => {
+      When('a run is started', startUnder())
+      Then('the run states no profile', () => expect(run.profile).toBeUndefined())
+    })
+
+    RuleScenario('The profile survives a pause and a resume', ({ When, And, Then }) => {
+      When('a run is started under "default"', startUnder('default'))
+      And('it pauses at phase 2', () => {
+        run = runs.pause(run.id, 2)
+      })
+      And('it is resumed', () => {
+        run = runs.resume(run.id)
+      })
+      Then('the run\'s profile is "default"', profileIs('default'))
     })
   })
 })

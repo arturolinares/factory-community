@@ -365,4 +365,43 @@ export const MIGRATIONS: readonly Migration[] = [
       `)
     },
   },
+  {
+    version: 14,
+    describe: 'how much authority a project grants, and what a run was given',
+    up: (db) => {
+      // Three columns, two questions.
+      //
+      // `projects.profile` is nullable and null means "not stated", which is
+      // not the same as `default`: a project that has never been asked follows
+      // the installation's choice, so changing that choice actually changes the
+      // projects that never chose. Storing `default` for everyone would freeze
+      // every existing project against a setting they had no chance to see.
+      //
+      // `projects.granted_directories` is a JSON array of absolute paths the
+      // project has allowed beyond its workspace, for good.
+      //
+      // Directories rather than permission *classes*, because a class is not
+      // something Factory can honour. Factory does not mediate the action — the
+      // agent's own CLI refuses it — so the only lever Factory has is what it
+      // passes on the next invocation, and `--add-dir` is the one that was
+      // measured to work. A grant is therefore a concrete thing: one more
+      // directory inside the effective boundary, which is also what §31 of the
+      // standard describes.
+      //
+      // Text rather than a table because it is a small set, read whole, always
+      // with its project, and never queried across projects — the shape
+      // `task_workflows` needed a table for, this does not.
+      //
+      // `runs.profile` is what the run was actually given, recorded rather than
+      // derived. Deriving it later would read today's project setting and
+      // describe a run that happened under a different one, which is the same
+      // trap `session_provider` was added to avoid in migration 13. Null for
+      // every run that already exists, because nothing knew.
+      db.exec(`
+        ALTER TABLE projects ADD COLUMN profile TEXT;
+        ALTER TABLE projects ADD COLUMN granted_directories TEXT;
+        ALTER TABLE runs ADD COLUMN profile TEXT;
+      `)
+    },
+  },
 ]

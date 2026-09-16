@@ -237,3 +237,25 @@ Feature: Runs, steps and the output they produced
       And a run of "diagnose" stamped with the same entry
       And "look" ran in "triage" and succeeded
       Then no phases have been carried out
+
+  Rule: a run records the authority it was given
+
+    Recorded rather than derived. "What authority did this run have?" has to be
+    answerable after the project's setting has moved on, which is the same trap
+    `session_provider` was added to avoid: reading a phase back later lets an
+    edit disagree with what actually ran.
+
+    Scenario: A run carries the profile it was started with
+      When a run is started under "full-access"
+      Then the run's profile is "full-access"
+
+    Scenario: A run started without one records none
+      When a run is started
+      # Every run from before profiles existed. Null is the truth: nothing knew.
+      Then the run states no profile
+
+    Scenario: The profile survives a pause and a resume
+      When a run is started under "default"
+      And it pauses at phase 2
+      And it is resumed
+      Then the run's profile is "default"

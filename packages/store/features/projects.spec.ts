@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventBus, type FactoryEvent } from '@factory/events'
-import type { Project, Task } from '@factory/core'
+import type { ExecutionProfile, Project, Task } from '@factory/core'
 import {
   MIGRATIONS,
   ProjectRepository,
@@ -16,7 +16,7 @@ import {
 
 const feature = await loadFeature(fileURLToPath(new URL('./projects.feature', import.meta.url)))
 
-describeFeature(feature, ({ Background, Scenario, AfterEachScenario }) => {
+describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => {
   let store: Store
   let projects: ProjectRepository
   let tasks: TaskRepository
@@ -291,5 +291,144 @@ describeFeature(feature, ({ Background, Scenario, AfterEachScenario }) => {
       attempt(() => projects.setWorktrees('nope', false)),
     )
     Then('it is refused', () => expect(failure).toBeDefined())
+  })
+
+  Rule('a project says how much authority its runs get, and what else they may reach', ({
+    RuleScenario,
+  }) => {
+    const exists = (): void => add('factory')
+    const setProfile = (profile: ExecutionProfile | undefined) => (): void => {
+      attempt(() => {
+        project = projects.setProfile((project as Project).id, profile)
+      })
+    }
+    const grant = (directory: string) => (): void => {
+      attempt(() => {
+        project = projects.grantDirectory((project as Project).id, directory)
+      })
+    }
+    const revoke = (directory: string) => (): void => {
+      attempt(() => {
+        project = projects.revokeDirectory((project as Project).id, directory)
+      })
+    }
+    /** Straight into the column, which is what a hand edit looks like. */
+    const columnSays = (column: string, value: string) => (): void => {
+      store.db.run(`UPDATE projects SET ${column} = ? WHERE id = ?`, value, (project as Project).id)
+      project = projects.get((project as Project).id)
+    }
+    const granted = (expected: string) => (): void => {
+      expect((project as Project).grantedDirectories.join(', ')).toBe(expected)
+    }
+    const noGrants = (): void => {
+      expect((project as Project).grantedDirectories).toEqual([])
+    }
+    const unstated = (): void => {
+      expect((project as Project).profile).toBeUndefined()
+    }
+
+    RuleScenario('A new project states no profile', ({ Given, Then, And }) => {
+      Given('the project "factory" exists', exists)
+      Then('it states no profile', unstated)
+      And('it has granted no directories', noGrants)
+    })
+
+    RuleScenario('A profile can be stated and read back', ({ Given, When, Then }) => {
+      Given('the project "factory" exists', exists)
+      When('I set its profile to "full-access"', setProfile('full-access'))
+      Then('its profile is "full-access"', () =>
+        expect((project as Project).profile).toBe('full-access'),
+      )
+    })
+
+    RuleScenario('A profile can be cleared back to unstated', ({ Given, And, When, Then }) => {
+      Given('the project "factory" exists', exists)
+      And('its profile is "full-access"', setProfile('full-access'))
+      When('I clear its profile', setProfile(undefined))
+      Then('it states no profile', unstated)
+    })
+
+    RuleScenario('Changing the profile is announced', ({ Given, When, Then }) => {
+      Given('the project "factory" exists', exists)
+      When('I set its profile to "full-access"', setProfile('full-access'))
+      Then('a "project.changed" event says so', () => {
+        const changed = events.filter((event) => event.name === 'project.changed')
+        expect(changed.at(-1)?.payload).toMatchObject({ name: 'factory' })
+      })
+    })
+
+    RuleScenario('Setting a profile on a project that is not there is refused', ({
+      When,
+      Then,
+    }) => {
+      When('I set the profile of a project that does not exist', () =>
+        attempt(() => projects.setProfile('nope', 'full-access')),
+      )
+      Then('it is refused', () => expect(failure).toBeDefined())
+    })
+
+    RuleScenario('A granted directory is remembered', ({ Given, When, Then }) => {
+      Given('the project "factory" exists', exists)
+      When('I grant it the directory "/repos/shared-library"', grant('/repos/shared-library'))
+      Then('its granted directories are "/repos/shared-library"', granted('/repos/shared-library'))
+    })
+
+    RuleScenario('Granting the same directory twice changes nothing', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the project "factory" exists', exists)
+      And('it has been granted "/repos/shared-library"', grant('/repos/shared-library'))
+      When('I grant it the directory "/repos/shared-library"', grant('/repos/shared-library'))
+      Then('its granted directories are "/repos/shared-library"', granted('/repos/shared-library'))
+    })
+
+    RuleScenario('Granted directories are kept in order', ({ Given, And, When, Then }) => {
+      Given('the project "factory" exists', exists)
+      And('it has been granted "/repos/zoo"', grant('/repos/zoo'))
+      When('I grant it the directory "/repos/aardvark"', grant('/repos/aardvark'))
+      Then(
+        'its granted directories are "/repos/aardvark, /repos/zoo"',
+        granted('/repos/aardvark, /repos/zoo'),
+      )
+    })
+
+    RuleScenario('A relative directory cannot be granted', ({ Given, When, Then }) => {
+      Given('the project "factory" exists', exists)
+      When('I grant it the directory "../shared-library"', grant('../shared-library'))
+      Then('it is refused', () => expect(failure).toBeDefined())
+    })
+
+    RuleScenario('A granted directory can be taken back', ({ Given, And, When, Then }) => {
+      Given('the project "factory" exists', exists)
+      And('it has been granted "/repos/shared-library"', grant('/repos/shared-library'))
+      When('I revoke the directory "/repos/shared-library"', revoke('/repos/shared-library'))
+      Then('it has granted no directories', noGrants)
+    })
+
+    RuleScenario('A column edited by hand into nonsense reads as no grants', ({
+      Given,
+      And,
+      Then,
+    }) => {
+      Given('the project "factory" exists', exists)
+      And(
+        'its granted directories column says "not json"',
+        columnSays('granted_directories', 'not json'),
+      )
+      Then('it has granted no directories', noGrants)
+    })
+
+    RuleScenario('A profile edited by hand into nonsense reads as unstated', ({
+      Given,
+      And,
+      Then,
+    }) => {
+      Given('the project "factory" exists', exists)
+      And('its profile column says "sort-of-safe"', columnSays('profile', 'sort-of-safe'))
+      Then('it states no profile', unstated)
+    })
   })
 })
