@@ -782,6 +782,7 @@ Gherkin lives beside the contract it specifies. This index is the one place to r
 | `packages/core/features/agent-environment.feature` | What a step's process can see: credentials withheld, a provider's own kept, and every name said |
 | `packages/core/features/processes.feature` | Stopping what Factory started: the group not the process, proved on a real grandchild |
 | `packages/core/features/denials.feature` | Noticing an agent was refused something, from the wordings its CLI actually prints |
+| `packages/core/features/task-dependencies.feature` | One task waiting for another: met, waiting, dead; the queue order; a ring caught |
 | `factory-pro/…/desktop-capability.feature` | Pro is a plugin: same host, same suite, no core changes |
 | `factory-pro/packages/desktop/features/shell.feature` | The desktop shell: attach or start, the menu bar, what is worth a notification |
 | `packages/store/features/store.feature` | Migrations, transactions, and the guards around both |
