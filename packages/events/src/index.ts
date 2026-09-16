@@ -50,6 +50,21 @@ export interface FactoryEvents {
   'step.started': { runId: string; phase: string; index: number; uses: string }
   'step.completed': { runId: string; phase: string; index: number; exitCode: number }
   'step.failed': { runId: string; phase: string; index: number; exitCode: number; message: string }
+  /**
+   * An agent was refused something by its own CLI's confinement.
+   *
+   * Emitted whether or not the run failed, because a confined agent that is
+   * refused something exits 0 and says so in prose — so this is the only
+   * notice anybody gets. `path` is present when the refusal named one, which
+   * is the case Factory can act on: a directory is what it can grant.
+   */
+  'permission.requested': {
+    runId: string
+    taskId?: string
+    id: string
+    describe: string
+    path?: string
+  }
   'approval.requested': { runId: string; phase: string }
   'approval.granted': { runId: string; phase: string }
 }

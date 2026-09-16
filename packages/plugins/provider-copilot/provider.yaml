@@ -77,3 +77,10 @@ env: {}
 # cost of the provider needing the credential at all, and it is written down in
 # docs/security/providers.md rather than implied.
 passEnv: ['GH_TOKEN', 'GITHUB_TOKEN']
+
+# None, because nothing has been observed. This CLI verifies file paths by
+# default — that is why the Default profile stops passing `--allow-all-paths` —
+# but how it words a refusal has not been seen, and inventing the words would
+# produce a detector that either never fires or fires on prose. It reports
+# nothing until somebody runs it and reads the output.
+denialPatterns: []

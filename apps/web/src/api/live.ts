@@ -20,7 +20,15 @@ export interface LiveConnection {
   close(): void
 }
 
-/** Named events carry their name in the SSE `event:` field, so each is listened for. */
+/**
+ * Named events carry their name in the SSE `event:` field, so each is listened for.
+ *
+ * A second, partial copy of `FactoryEvents` — every new event has to be added
+ * here too, and forgetting is invisible: the board simply stops updating for
+ * that one. `approval.granted` was missing for exactly that reason. Recorded in
+ * improvements.md as something to derive rather than maintain; until then, this
+ * comment is the warning.
+ */
 const EVENTS = [
   'task.created',
   'task.transitioned',
@@ -33,6 +41,8 @@ const EVENTS = [
   'step.completed',
   'step.failed',
   'approval.requested',
+  'approval.granted',
+  'permission.requested',
   'project.added',
   'project.changed',
   'project.removed',

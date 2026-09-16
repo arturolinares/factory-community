@@ -3,6 +3,7 @@ import type { Capability } from '../capabilities.js'
 import type { CapabilityLookup } from '../host.js'
 import type { Problem } from '../problems.js'
 import type { ExecutionProfile } from '../security/profile.js'
+import type { DenialPattern } from '../security/denials.js'
 import { closedWithExtensions, problemsFromZod, slug } from './common.js'
 
 /**
@@ -143,6 +144,13 @@ export interface PlannedStep {
    * guessed.
    */
   readonly passEnv?: readonly string[]
+  /**
+   * What a refusal from this step's command looks like.
+   *
+   * Travels with the step for the reason `passEnv` does: the runner is what
+   * reads the output, and it has no business knowing that providers exist.
+   */
+  readonly denialPatterns?: readonly DenialPattern[]
   /**
    * argv for a second and later attempt, when the first attempt changed the
    * world in a way that makes running it again wrong.

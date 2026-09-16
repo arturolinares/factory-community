@@ -214,6 +214,9 @@ export const agentStepKind: StepKindCapability = defineStepKind({
       args: rendered.args,
       env: rendered.env,
       ...(rendered.passEnv === undefined ? {} : { passEnv: rendered.passEnv }),
+      ...(rendered.denialPatterns === undefined
+        ? {}
+        : { denialPatterns: rendered.denialPatterns }),
       ...(rendered.stdin === undefined ? {} : { stdin: rendered.stdin }),
       ...(resuming === undefined ? {} : { retryArgs: resuming.args }),
       ...(rendered.session === undefined

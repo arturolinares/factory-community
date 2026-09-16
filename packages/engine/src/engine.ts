@@ -1,4 +1,5 @@
 import {
+  denialMessage,
   isRunFinished,
   ProcessRegistry,
   runPlan,
@@ -494,7 +495,27 @@ export class Engine {
     // when the task lands in front of a person — which for an approval gate is
     // the entire point of having it.
     const evidenceProblems = this.#collectEvidence(run.id, plan, result)
-    const problems = [...result.problems, ...evidenceProblems]
+
+    // Every refusal gets said, whatever the run did. This is the only notice
+    // anybody gets for the ordinary case: a confined agent that is refused
+    // something exits 0 and reports it in prose, so there is no failure to
+    // read afterwards.
+    const denialProblems: Problem[] = result.denials.map((denial) => ({
+      severity: 'warning',
+      message: denialMessage(denial),
+      rule: 'run.permissionRefused',
+    }))
+    for (const denial of result.denials) {
+      this.#events?.emit('permission.requested', {
+        runId: run.id,
+        taskId: task.id,
+        id: denial.id,
+        describe: denial.describe,
+        ...(denial.path === undefined ? {} : { path: denial.path }),
+      })
+    }
+
+    const problems = [...result.problems, ...evidenceProblems, ...denialProblems]
     const detail = summarise(result.problems, '')
 
     switch (result.status) {
@@ -538,6 +559,24 @@ export class Engine {
         const state = result.status === 'timed-out' ? 'timed-out' : 'failed'
         const reason = detail === '' ? `"${workflow}" ${state}.` : detail
         this.#recordSkipped(run.id, plan, result)
+
+        // A run that failed *and* was refused something gets parked rather than
+        // blocked. It was going to stop either way; pausing it is strictly
+        // better — the run keeps its place, the person is told what was
+        // refused, and approving continues from the failing phase rather than
+        // from the beginning.
+        //
+        // Only when it failed. A run that was refused something and still
+        // exited 0 is left alone: interrupting it would be wrong, because the
+        // work that mattered may well be done, and not interrupting is the
+        // entire point of the Default profile. It is reported either way.
+        if (result.denials.length > 0) {
+          const resumeFrom = Math.max(plan.phases.length - result.skipped.length - 1, 0)
+          this.#runs.pause(run.id, resumeFrom, reason)
+          move('await_approval')
+          return { run: this.#runs.get(run.id) as Run, stop: 'paused', problems }
+        }
+
         this.#runs.finish(run.id, result.status === 'refused' ? 'refused' : state, {
           detail: reason,
         })

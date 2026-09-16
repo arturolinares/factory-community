@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect } from 'vitest'
 import { fileURLToPath } from 'node:url'
-import { EventBus } from '@factory/events'
+import { EventBus, type FactoryEvent } from '@factory/events'
 import type { FailureContext } from '@factory/engine'
 import type {
   Approval,
   PlanResult,
   ResolvedPhase,
+  Problem,
   ResolvedPlan,
   StopReport,
   Run,
@@ -31,6 +32,8 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
   let work = ''
   let report: ReconcileReport
   let failure: unknown
+  let problems: Problem[] = []
+  let seen: FactoryEvent[] = []
   let tick = 0
   let ids = 0
   let sessions = 0
@@ -60,7 +63,10 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       store = openStore({ file: ':memory:', migrations: MIGRATIONS })
       // Monotonic: entry ids are minted from here too, so a fixed value would
       // give every workflow in a task the same entry id.
+      problems = []
+      seen = []
       bus = new EventBus({ onSubscriberError: () => {} })
+      bus.onAny((event) => seen.push(event))
       tasks = new TaskRepository({
         db: store.db,
         events: bus,
@@ -154,7 +160,12 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
   }
   const runEngine = async (): Promise<void> => {
     try {
-      task = (await engine.run(task.id)).task
+      const outcome = await engine.run(task.id)
+      task = outcome.task
+      // Kept, so a scenario can assert on what the engine *said* as well as on
+      // what it wrote down. Warnings never reach the database, so the outcome
+      // is the only place a refusal appears.
+      problems = [...outcome.problems]
     } catch (error) {
       failure = error
     }
@@ -1328,6 +1339,102 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
         const history = tasks.history(task.id)
         expect(history.at(-1)?.detail).toBe('Factory was shut down.')
       })
+    })
+  })
+
+  Rule('a refusal is always reported, and only parks a run that failed', ({ RuleScenario }) => {
+    /** The message Claude Code actually prints, and the pattern Factory ships. */
+    const REFUSAL = '/tmp/probe.txt is outside the configured working directories'
+    const patterns = [
+      {
+        id: 'path-outside-workspace',
+        contains: 'is outside the',
+        match: '(\\S+) is outside the (?:configured )?working director',
+        describe: "a path outside the task's workspace",
+      },
+    ]
+    const refusedPhase = (exitCode: number): ResolvedPhase => {
+      const command = `echo "${REFUSAL}"; exit ${exitCode}`
+      return {
+        name: 'review',
+        approval: 'none',
+        cwd: process.cwd(),
+        steps: [
+          {
+            index: 0,
+            uses: 'agent',
+            planned: {
+              describe: command,
+              command: 'bash',
+              args: ['-c', command],
+              denialPatterns: patterns,
+            },
+            raw: { uses: 'shell', run: command },
+          },
+        ],
+      }
+    }
+    const refusedAnd = (exitCode: number) => (): void => {
+      givePlan('review', [refusedPhase(exitCode)])
+    }
+    const plainFailure = (): void => {
+      givePlan('review', [shellPhase('review', 'exit 1')])
+    }
+    const refusalProblem = (): void => {
+      const problem = problems.find((entry) => entry.rule === 'run.permissionRefused')
+      expect(problem, JSON.stringify(problems)).toBeDefined()
+      expect(problem?.severity).toBe('warning')
+    }
+
+    RuleScenario('A refusal on a run that succeeded is reported without stopping it', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the workflow "review" whose phase is refused a path but succeeds', refusedAnd(0))
+      And("it is the task's only workflow", () => assign('review'))
+      And('the task is queued', queue)
+      When('the engine works on it', runEngine)
+      Then('the run completed', () =>
+        expect(allRuns().map((run) => run.state)).toEqual(['completed']),
+      )
+      And('the task is done', () => expect(task.state).toBe('done'))
+      And('a problem says the agent was refused something', refusalProblem)
+      And('the problem names the path it was refused', () => {
+        const problem = problems.find((entry) => entry.rule === 'run.permissionRefused')
+        expect(problem?.message).toContain('/tmp/probe.txt')
+      })
+      And('a "permission.requested" event was emitted', () => {
+        const emitted = seen.filter((event) => event.name === 'permission.requested')
+        expect(emitted).toHaveLength(1)
+        expect(emitted[0]?.payload).toMatchObject({ id: 'path-outside-workspace' })
+      })
+    })
+
+    RuleScenario('A refusal on a run that failed parks it for a person', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the workflow "review" whose phase is refused a path and fails', refusedAnd(1))
+      And("it is the task's only workflow", () => assign('review'))
+      And('the task is queued', queue)
+      When('the engine works on it', runEngine)
+      Then('the task is awaiting approval', () => expect(task.state).toBe('awaiting_approval'))
+      And('the run is paused', () =>
+        expect(allRuns().map((run) => run.state)).toEqual(['paused']),
+      )
+      And('a problem says the agent was refused something', refusalProblem)
+    })
+
+    RuleScenario('A failure with no refusal still blocks', ({ Given, And, When, Then }) => {
+      Given('the workflow "review" whose phase simply fails', plainFailure)
+      And("it is the task's only workflow", () => assign('review'))
+      And('the task is queued', queue)
+      When('the engine works on it', runEngine)
+      Then('the task is blocked', () => expect(task.state).toBe('blocked'))
     })
   })
 })

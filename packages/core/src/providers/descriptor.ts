@@ -165,6 +165,40 @@ const descriptorShape = {
   passEnv: z.array(z.string().min(1)).default([]),
 
   /**
+   * What a refusal looks like, as this CLI words it.
+   *
+   * Needed because the Default profile works by handing the CLI the flags that
+   * confine it, which moves the refusal *inside* the agent where Factory cannot
+   * see it. Measured against Claude Code: a refused write leaves the process
+   * exiting **0** with the refusal in its output, so there is nothing to detect
+   * except the words.
+   *
+   * Data, not code, so a third-party provider can say how its own refusals read
+   * without touching core. A first capture group is taken to be the path that
+   * was refused, which is the one part Factory can act on — a directory is
+   * exactly what it can grant.
+   */
+  denialPatterns: z
+    .array(
+      closedWithExtensions({
+        id: slug('id'),
+        /**
+         * A plain substring that gates the expression.
+         *
+         * Required, and long enough to be selective, because it is what keeps
+         * the scan cheap: the expression only runs on a window around a hit.
+         * Without it a pattern with an unbounded capture group backtracks
+         * catastrophically against a long run of non-whitespace, which is what
+         * an agent printing data looks like.
+         */
+        contains: z.string().min(4),
+        match: z.string().min(1),
+        describe: z.string().min(1),
+      }),
+    )
+    .default([]),
+
+  /**
    * True when this descriptor has not been checked against the real CLI.
    * `doctor` says so out loud rather than letting someone discover it when a
    * run fails with an unrecognised flag.

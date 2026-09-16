@@ -5,6 +5,7 @@ import type { AgentStep, SessionScope } from '../builtins/steps.js'
 import { MODEL_ROLES } from '../model-roles.js'
 import { permissionArgsFor, type ProviderDescriptor, type ProviderFeature } from './descriptor.js'
 import { DEFAULT_PROFILE, isConfined, type ExecutionProfile } from '../security/profile.js'
+import type { DenialPattern } from '../security/denials.js'
 
 export const PROVIDER_KIND = 'provider'
 
@@ -31,6 +32,8 @@ export interface RenderedCommand {
    * and the runner has no business knowing that providers exist.
    */
   readonly passEnv?: readonly string[]
+  /** What a refusal from this CLI looks like. Straight off the descriptor. */
+  readonly denialPatterns?: readonly DenialPattern[]
   /**
    * The session this command deals in, when it actually put a flag in for one.
    *
@@ -186,6 +189,9 @@ export function render(descriptor: ProviderDescriptor, request: RenderRequest): 
     args,
     env: descriptor.env,
     ...(descriptor.passEnv.length === 0 ? {} : { passEnv: descriptor.passEnv }),
+    ...(descriptor.denialPatterns.length === 0
+      ? {}
+      : { denialPatterns: descriptor.denialPatterns }),
     ...(descriptor.stdin === undefined ? {} : { stdin: descriptor.stdin }),
     ...(session.emitted === undefined ? {} : { session: session.emitted }),
   }

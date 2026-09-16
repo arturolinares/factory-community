@@ -94,6 +94,36 @@ directoryFlag: '--add-dir'
 
 extraArgs: []
 
+# How a refusal reads, taken verbatim from probes run on 2026-09-15 rather than
+# from documentation. The Default profile works by handing the CLI the flags
+# that confine it, which moves the refusal inside the agent — and `claude -p`
+# exits **0** with the refusal in its output, so these words are the only
+# notice Factory gets.
+#
+# Two observed wordings. The first names the path that was refused, which is
+# the one thing Factory can act on; the second names the *working directory*
+# instead, so it captures nothing and is there to be recognised rather than
+# acted on.
+#
+# Nothing here for "an action needed approval". Those phrasings came from the
+# agent's own prose rather than from the CLI, and a pattern matching prose is a
+# pattern that fires when an agent merely writes about permissions. Better to
+# report less than to park a run for a sentence in a report.
+# `contains` gates each expression: a plain substring search over the whole
+# output, and the expression only runs on a window around a hit. That is not a
+# nicety — the first version scanned a rolling 64 KiB tail with an unbounded
+# capture group, and 200 KB of ordinary output backtracked long enough to stop
+# the process.
+denialPatterns:
+  - id: path-outside-workspace
+    contains: 'is outside the'
+    match: '(\S+) is outside the (?:configured )?working director'
+    describe: a path outside the task's workspace
+  - id: file-tools-confined
+    contains: 'confines the file tools'
+    match: '--restricted confines the file tools'
+    describe: a file outside the task's workspace
+
 # Non-interactive Claude waits on stdin without this.
 stdin: /dev/null
 

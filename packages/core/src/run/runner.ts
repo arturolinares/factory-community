@@ -4,6 +4,7 @@ import type { Problem } from '../problems.js'
 import type { ResolvedPhase, ResolvedPlan, ResolvedStep } from '../plan/resolve.js'
 import { retryPolicy } from '../schema/step.js'
 import { agentEnvironment, withheldMessage } from '../security/environment.js'
+import { DenialScanner, type Denial } from '../security/denials.js'
 import {
   processGroup,
   type ProcessRegistry,
@@ -39,6 +40,14 @@ export interface StepOutcome {
   readonly error?: string
   /** How many times it ran. More than one means it was retried. */
   readonly attempts: number
+  /**
+   * Refusals found in this step's output.
+   *
+   * Independent of `exitCode`, deliberately. A confined agent that is refused
+   * something exits 0 and says so in prose — measured against Claude Code —
+   * so tying this to failure would find nothing at all in the ordinary case.
+   */
+  readonly denials?: readonly Denial[]
 }
 
 export interface RunResult {
@@ -47,6 +56,13 @@ export interface RunResult {
   readonly problems: readonly Problem[]
   /** Phases that never ran because something before them stopped the run. */
   readonly skipped: readonly string[]
+  /**
+   * Every refusal any step reported, de-duplicated by kind.
+   *
+   * Collected here so the engine has one place to look, rather than walking
+   * the steps and deciding for itself what counts.
+   */
+  readonly denials: readonly Denial[]
 }
 
 export interface RunOptions {
@@ -288,11 +304,21 @@ export async function runPlan(options: RunOptions): Promise<RunResult> {
       workflow: plan.workflow,
       ok: status === 'completed',
     })
+    // One entry per kind of refusal across the whole run, not per step. An
+    // agent refused the same thing in three phases has one problem.
+    const denials = new Map<string, Denial>()
+    for (const step of steps) {
+      for (const denial of step.denials ?? []) {
+        if (!denials.has(denial.id)) denials.set(denial.id, denial)
+      }
+    }
+
     return {
       status,
       steps,
       problems,
       skipped: plan.phases.slice(phasesReached).map((phase) => phase.name),
+      denials: [...denials.values()],
     }
   }
 }
@@ -411,16 +437,25 @@ function runStep(
       setTimeout(() => stop.kill('SIGKILL'), STOP_GRACE_MS)
     }, seconds * 1000)
 
-    child.stdout?.on('data', (data: Buffer) =>
-      options.onOutput?.(data.toString(), 'stdout', step, phase),
-    )
-    child.stderr?.on('data', (data: Buffer) =>
-      options.onOutput?.(data.toString(), 'stderr', step, phase),
-    )
+    // Watched for refusals as it goes, because a confined agent reports being
+    // refused and then exits 0 — there is no failure to inspect afterwards.
+    const scanner = new DenialScanner(step.planned.denialPatterns ?? [])
+    const observe = (text: string, stream: 'stdout' | 'stderr'): void => {
+      scanner.push(text)
+      options.onOutput?.(text, stream, step, phase)
+    }
 
-    const done = (outcome: StepOutcome) => {
+    child.stdout?.on('data', (data: Buffer) => observe(data.toString(), 'stdout'))
+    child.stderr?.on('data', (data: Buffer) => observe(data.toString(), 'stderr'))
+
+    const done = (partial: StepOutcome) => {
       if (settled) return
       settled = true
+      const found = scanner.denials()
+      const outcome: StepOutcome = {
+        ...partial,
+        ...(found.length === 0 ? {} : { denials: found }),
+      }
       clearTimeout(deadline)
       // Forgotten here rather than where it was stopped: this is the only moment
       // the process is actually gone, and a pid remembered after that is a pid

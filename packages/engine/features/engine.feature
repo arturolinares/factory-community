@@ -529,3 +529,47 @@ Feature: Turning a task into runs
       Then the run is recorded as cancelled
       And the task is cancelled
       And the reason is recorded against the task
+
+  Rule: a refusal is always reported, and only parks a run that failed
+
+    The plan for this increment assumed a refusal would fail the step. Running
+    the real CLI showed otherwise: a confined `claude -p` **exits 0** and reports
+    the refusal in prose. So the two cases are genuinely different and get
+    different answers.
+
+    A run that failed *and* was refused something was going to stop either way,
+    so parking it is strictly better: it keeps its place, the person is told
+    what was refused, and approving continues from the failing phase rather than
+    from the beginning.
+
+    A run that was refused something and still succeeded is left alone.
+    Interrupting it would be wrong — the work that mattered may well be done —
+    and not interrupting is the entire point of the Default profile.
+
+    Scenario: A refusal on a run that succeeded is reported without stopping it
+      Given the workflow "review" whose phase is refused a path but succeeds
+      And it is the task's only workflow
+      And the task is queued
+      When the engine works on it
+      Then the run completed
+      And the task is done
+      And a problem says the agent was refused something
+      And the problem names the path it was refused
+      And a "permission.requested" event was emitted
+
+    Scenario: A refusal on a run that failed parks it for a person
+      Given the workflow "review" whose phase is refused a path and fails
+      And it is the task's only workflow
+      And the task is queued
+      When the engine works on it
+      Then the task is awaiting approval
+      And the run is paused
+      And a problem says the agent was refused something
+
+    Scenario: A failure with no refusal still blocks
+      Given the workflow "review" whose phase simply fails
+      And it is the task's only workflow
+      And the task is queued
+      When the engine works on it
+      # Unchanged: parking is for the case a person can actually resolve.
+      Then the task is blocked
