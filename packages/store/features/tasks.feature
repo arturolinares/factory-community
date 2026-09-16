@@ -78,9 +78,9 @@ Feature: A task, and the rules about how it moves
 
   Scenario: The available actions depend on the state
     Given a task "Add due dates" with the workflow "development"
-    Then the offered actions are "archive, cancel, queue"
+    Then the offered actions are "archive, cancel, mark_done, queue"
     When I queue it
-    Then the offered actions are "cancel"
+    Then the offered actions are "cancel, mark_done"
 
   Scenario: Internal actions are not offered to a person
     Given a task "Add due dates" with the workflow "development"
@@ -427,3 +427,109 @@ Feature: A task, and the rules about how it moves
       And "The view" is made to wait for "Groundwork"
       When I ask for the edges in "one"
       Then there is 1 edge
+
+  Rule: A task can be marked done by hand
+
+    "I did this myself" — the work happened outside Factory, or it turned out
+    not to be needed, and everything waiting for it should stop waiting.
+
+    A separate action rather than letting a person reach the engine's
+    `complete`, which is only legal on a running task: telling Factory a
+    running task is finished would leave the agent going, the run row saying
+    `running`, and the engine's own completion throwing when it got there.
+
+    What it skips is real. No run, no artifacts, no evidence, and no flags — so
+    progress still reads none of the phases done. That is honest for work done
+    by hand; it is not a way to fake a run.
+
+    Scenario: A draft can be marked done
+      Given a task "Add due dates" with the workflow "development"
+      When I mark it done
+      Then the task is "done"
+      And it has a completion time
+
+    Scenario: A task with nothing planned can be marked done
+      Given a task "Add due dates"
+      # Queueing is refused here because there is nothing to run. Doing it by
+      # hand is exactly the case where there never was anything to run.
+      When I mark it done
+      Then the task is "done"
+
+    Scenario: A queued task marked done leaves the queue
+      Given a task "Add due dates" with the workflow "development"
+      And I queue it
+      When I mark it done
+      Then the task is "done"
+      And it has no place in the queue
+
+    Scenario: A blocked task can be marked done
+      Given a running task
+      And it is blocked because "the tests failed"
+      When I mark it done
+      Then the task is "done"
+      And there is no reason recorded
+
+    Scenario: A running task cannot be marked done by hand
+      Given a running task
+      # The agent would keep going, and the engine's own completion would then
+      # throw on a task that is already done.
+      When I mark it done
+      Then it is refused
+
+    Scenario: A task awaiting approval cannot be marked done by hand
+      Given a task awaiting approval
+      # It holds a paused run. Approve or reject it first, or the doctor starts
+      # warning about a run with nothing running.
+      When I mark it done
+      Then it is refused
+
+    Scenario: Marking done is recorded like any other move
+      Given a task "Add due dates" with the workflow "development"
+      When I mark it done
+      Then its history has 1 entry
+      And the entry says it went from "draft" to "done"
+
+    Scenario: A task marked done by hand earned nothing
+      Given a task "Add due dates" with the workflow "development"
+      When I mark it done
+      Then it has no flags
+      And its workflow is still ticked
+
+    Scenario: Completing is still the engine's alone
+      Given a running task
+      Then "complete" is not offered
+
+  Rule: The scheduler can block a task that is still queued
+
+    Queued tasks could only be cancelled before. The dependency gate needs a
+    third answer: a task whose blocker can never finish will never start, and
+    leaving it in the queue would park it for ever looking like it was about to
+    run.
+
+    Still the scheduler's move alone — a person has cancel.
+
+    Scenario: A queued task can be blocked with a reason
+      Given a task "Add due dates" with the workflow "development"
+      And I queue it
+      When it is blocked because "Task 2 was cancelled"
+      Then the task is "blocked"
+      And the reason is "Task 2 was cancelled"
+
+    Scenario: Blocking leaves the queue
+      Given a task "Add due dates" with the workflow "development"
+      And I queue it
+      When it is blocked because "Task 2 was cancelled"
+      Then it has no place in the queue
+
+    Scenario: Retrying puts it back in line
+      Given a task "Add due dates" with the workflow "development"
+      And I queue it
+      And it is blocked because "Task 2 was cancelled"
+      When I retry it
+      Then the task is "queued"
+      And there is no reason recorded
+
+    Scenario: Blocking is never offered to a person
+      Given a task "Add due dates" with the workflow "development"
+      And I queue it
+      Then "block" is not offered

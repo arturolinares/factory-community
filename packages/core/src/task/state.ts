@@ -132,12 +132,6 @@ export interface Task {
 }
 
 /**
- * The things a person or the scheduler can ask for.
- *
- * Named as intents rather than target states, because "retry" and "queue" reach
- * the same state for different reasons and a UI should say which it means.
- */
-/**
  * The workflow the engine would run next: the first one still ticked.
  *
  * `undefined` for a task with nothing left, which the display sites must say
@@ -151,6 +145,12 @@ export const nextEntry = (task: Task): TaskWorkflowEntry | undefined =>
 export const workflowNames = (task: Task): string[] =>
   task.workflows.map((entry) => entry.workflow)
 
+/**
+ * The things a person or the scheduler can ask for.
+ *
+ * Named as intents rather than target states, because "retry" and "queue" reach
+ * the same state for different reasons and a UI should say which it means.
+ */
 export const TASK_ACTIONS = [
   'queue',
   'start',
@@ -160,6 +160,7 @@ export const TASK_ACTIONS = [
   'reject',
   'block',
   'complete',
+  'mark_done',
   'retry',
   'cancel',
   'archive',
@@ -201,8 +202,25 @@ const MOVES: Record<TaskAction, Move> = {
   },
   approve: { from: ['awaiting_approval'], to: 'running', label: 'Approve' },
   reject: { from: ['awaiting_approval'], to: 'blocked', label: 'Reject' },
-  block: { from: ['running', 'awaiting_approval'], to: 'blocked', label: 'Block', internal: true },
+  // `queued` is here for the dependency gate: a queued task whose blocker can
+  // never finish would otherwise sit in the queue for ever looking like it was
+  // about to run, which is the one state the board exists to make obvious.
+  block: {
+    from: ['queued', 'running', 'awaiting_approval'],
+    to: 'blocked',
+    label: 'Block',
+    internal: true,
+  },
   complete: { from: ['running'], to: 'done', label: 'Complete', internal: true },
+  // "I did this myself." A separate action rather than lifting `complete`'s
+  // `internal`, because `complete` is `from: ['running']` and offering it there
+  // is the one case that corrupts state: the agent keeps going, the run row
+  // stays `running`, and the engine's own `complete` then throws.
+  //
+  // Not from `running` for that reason, and not from `awaiting_approval`, which
+  // holds a paused run — approve or reject it first, or `doctor` starts warning
+  // about an orphan.
+  mark_done: { from: ['draft', 'queued', 'blocked'], to: 'done', label: 'Mark done' },
   retry: { from: ['blocked'], to: 'queued', label: 'Retry' },
   cancel: {
     from: ['draft', 'queued', 'running', 'awaiting_approval', 'blocked'],

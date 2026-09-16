@@ -184,11 +184,13 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
     Given('a task "Add due dates" with the workflow "development"', () =>
       create('Add due dates', ['development']),
     )
-    Then('the offered actions are "archive, cancel, queue"', () =>
-      expect(offered()).toBe('archive, cancel, queue'),
+    Then('the offered actions are "archive, cancel, mark_done, queue"', () =>
+      expect(offered()).toBe('archive, cancel, mark_done, queue'),
     )
     When('I queue it', () => act('queue'))
-    Then('the offered actions are "cancel"', () => expect(offered()).toBe('cancel'))
+    Then('the offered actions are "cancel, mark_done"', () =>
+      expect(offered()).toBe('cancel, mark_done'),
+    )
   })
 
   Scenario('Internal actions are not offered to a person', ({ Given, When, Then }) => {
@@ -834,6 +836,152 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       Then('there is 1 edge', () => {
         expect(edges).toEqual([{ taskId: idOf('The model'), dependsOn: idOf('Scaffold') }])
       })
+    })
+  })
+
+  Rule('A task can be marked done by hand', ({ RuleScenario }) => {
+    const givenDraft = (workflows: string[] = []) => (): void =>
+      create('Add due dates', workflows)
+    const markDone = (): void => act('mark_done')
+    const isDone = (): void => expect(task?.state).toBe('done')
+
+    RuleScenario('A draft can be marked done', ({ Given, When, Then, And }) => {
+      Given('a task "Add due dates" with the workflow "development"', givenDraft(['development']))
+      When('I mark it done', markDone)
+      Then('the task is "done"', isDone)
+      And('it has a completion time', () => expect(task?.completedAt).toBeDefined())
+    })
+
+    RuleScenario('A task with nothing planned can be marked done', ({ Given, When, Then }) => {
+      Given('a task "Add due dates"', givenDraft())
+      When('I mark it done', markDone)
+      Then('the task is "done"', isDone)
+    })
+
+    RuleScenario('A queued task marked done leaves the queue', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('a task "Add due dates" with the workflow "development"', givenDraft(['development']))
+      And('I queue it', () => act('queue'))
+      When('I mark it done', markDone)
+      Then('the task is "done"', isDone)
+      And('it has no place in the queue', () => expect(task?.queuePosition).toBeUndefined())
+    })
+
+    RuleScenario('A blocked task can be marked done', ({ Given, And, When, Then }) => {
+      Given('a running task', givenRunning)
+      And('it is blocked because "the tests failed"', () => act('block', 'the tests failed'))
+      When('I mark it done', markDone)
+      Then('the task is "done"', isDone)
+      And('there is no reason recorded', () => expect(task?.blockedReason).toBeUndefined())
+    })
+
+    RuleScenario('A running task cannot be marked done by hand', ({ Given, When, Then }) => {
+      Given('a running task', givenRunning)
+      When('I mark it done', markDone)
+      Then('it is refused', () => expect(failure).toBeInstanceOf(Error))
+    })
+
+    RuleScenario('A task awaiting approval cannot be marked done by hand', ({
+      Given,
+      When,
+      Then,
+    }) => {
+      Given('a task awaiting approval', () => {
+        givenRunning()
+        act('await_approval')
+      })
+      When('I mark it done', markDone)
+      Then('it is refused', () => expect(failure).toBeInstanceOf(Error))
+    })
+
+    RuleScenario('Marking done is recorded like any other move', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('a task "Add due dates" with the workflow "development"', givenDraft(['development']))
+      When('I mark it done', markDone)
+      Then('its history has 1 entry', () => expect(tasks.history(task!.id)).toHaveLength(1))
+      And('the entry says it went from "draft" to "done"', () => {
+        const [entry] = tasks.history(task!.id)
+        expect(entry?.from).toBe('draft')
+        expect(entry?.to).toBe('done')
+      })
+    })
+
+    RuleScenario('A task marked done by hand earned nothing', ({ Given, When, Then, And }) => {
+      Given('a task "Add due dates" with the workflow "development"', givenDraft(['development']))
+      When('I mark it done', markDone)
+      Then('it has no flags', () => expect(tasks.flags(task!.id)).toEqual([]))
+      // Nothing ran, so nothing is ticked off. A hand-done task shows no
+      // progress, which is the honest reading.
+      And('its workflow is still ticked', () =>
+        expect(task?.workflows.every((entry) => entry.enabled)).toBe(true),
+      )
+    })
+
+    RuleScenario('Completing is still the engine\'s alone', ({ Given, Then }) => {
+      Given('a running task', givenRunning)
+      Then('"complete" is not offered', () => expect(offered()).not.toContain('complete'))
+    })
+  })
+
+  Rule('The scheduler can block a task that is still queued', ({ RuleScenario }) => {
+    const givenQueued = (): void => {
+      create('Add due dates', ['development'])
+      act('queue')
+    }
+    const blocked = (): void => act('block', 'Task 2 was cancelled')
+
+    RuleScenario('A queued task can be blocked with a reason', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('a task "Add due dates" with the workflow "development"', () =>
+        create('Add due dates', ['development']),
+      )
+      And('I queue it', () => act('queue'))
+      When('it is blocked because "Task 2 was cancelled"', blocked)
+      Then('the task is "blocked"', () => expect(task?.state).toBe('blocked'))
+      And('the reason is "Task 2 was cancelled"', () =>
+        expect(task?.blockedReason).toBe('Task 2 was cancelled'),
+      )
+    })
+
+    RuleScenario('Blocking leaves the queue', ({ Given, And, When, Then }) => {
+      Given('a task "Add due dates" with the workflow "development"', () =>
+        create('Add due dates', ['development']),
+      )
+      And('I queue it', () => act('queue'))
+      When('it is blocked because "Task 2 was cancelled"', blocked)
+      Then('it has no place in the queue', () => expect(task?.queuePosition).toBeUndefined())
+    })
+
+    RuleScenario('Retrying puts it back in line', ({ Given, And, When, Then }) => {
+      Given('a task "Add due dates" with the workflow "development"', () =>
+        create('Add due dates', ['development']),
+      )
+      And('I queue it', () => act('queue'))
+      And('it is blocked because "Task 2 was cancelled"', blocked)
+      When('I retry it', () => act('retry'))
+      Then('the task is "queued"', () => expect(task?.state).toBe('queued'))
+      And('there is no reason recorded', () => expect(task?.blockedReason).toBeUndefined())
+    })
+
+    RuleScenario('Blocking is never offered to a person', ({ Given, And, Then }) => {
+      Given('a task "Add due dates" with the workflow "development"', givenQueued)
+      And('I queue it', () => {
+        // Queued by the Given: the step is here because the scenario reads
+        // better with it, and acting again would be refused.
+      })
+      Then('"block" is not offered', () => expect(offered()).not.toContain('block'))
     })
   })
 })
