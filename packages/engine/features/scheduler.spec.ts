@@ -702,4 +702,324 @@ describeFeature(feature, ({ Background, Scenario, Rule, AfterEachScenario }) => 
       )
     })
   })
+
+  Rule('a task waits for the tasks it depends on', ({ RuleScenario }) => {
+    const ticks = (): void => {
+      report = scheduler.tick()
+    }
+    const waitsFor = (name: string, blocker: string) => (): void => {
+      tasks.dependOn(idOf(name), idOf(blocker))
+    }
+    const skippedBecause = (name: string, reason: string) => (): void => {
+      expect(skippedFor(name)).toBe(reason)
+    }
+    const isState = (name: string, state: string) => (): void => {
+      expect(stateOf(name)).toBe(state)
+    }
+    const started = (names: string) => (): void => {
+      expect(startedNames()).toEqual(names.split(', '))
+    }
+
+    RuleScenario('A task waits for its blocker', ({ Given, And, When, Then }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      When('the scheduler ticks', ticks)
+      Then('the started tasks are "Scaffold" in that order', started('Scaffold'))
+      And(
+        '"The model" was skipped because "a task it depends on is not done"',
+        skippedBecause('The model', 'a task it depends on is not done'),
+      )
+      And('"The model" is "queued"', isState('The model', 'queued'))
+    })
+
+    RuleScenario('The skip names the blocker', ({ Given, And, When, Then }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      When('the scheduler ticks', ticks)
+      Then('the skip detail for "The model" names "Scaffold"', () =>
+        expect(reasonFor('The model')).toBe('"Scaffold"'),
+      )
+    })
+
+    RuleScenario('It starts once the blocker is done', ({ Given, And, When, Then }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('the scheduler ticks', ticks)
+      When('"Scaffold" is done', () => {
+        tasks.act(idOf('Scaffold'), 'complete')
+      })
+      And('the scheduler ticks again', ticks)
+      Then('"The model" is started', () => expect(startedNames()).toEqual(['The model']))
+    })
+
+    RuleScenario('A task with no dependencies is unaffected', ({ Given, When, Then }) => {
+      Given('a queued task "Add due dates" on a parallel workflow', () =>
+        queued('Add due dates', 'parallel'),
+      )
+      When('the scheduler ticks', ticks)
+      Then('"Add due dates" is started', () => expect(startedNames()).toEqual(['Add due dates']))
+    })
+
+    RuleScenario('Two tasks waiting for the same blocker both go when it is done', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('a queued task "The view" on a parallel workflow', () =>
+        queued('The view', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('"The view" waits for "Scaffold"', waitsFor('The view', 'Scaffold'))
+      And('the scheduler ticks', ticks)
+      When('"Scaffold" is done', () => {
+        tasks.act(idOf('Scaffold'), 'complete')
+      })
+      And('the scheduler ticks again', ticks)
+      Then('the started tasks are "The model, The view" in that order', started('The model, The view'))
+    })
+
+    RuleScenario('A chain runs one at a time in order', ({ Given, And, When, Then }) => {
+      Given('a queued task "One" on a parallel workflow', () => queued('One', 'parallel'))
+      And('a queued task "Two" on a parallel workflow', () => queued('Two', 'parallel'))
+      And('a queued task "Three" on a parallel workflow', () => queued('Three', 'parallel'))
+      And('"Two" waits for "One"', waitsFor('Two', 'One'))
+      And('"Three" waits for "Two"', waitsFor('Three', 'Two'))
+      When('the scheduler ticks', ticks)
+      Then('the started tasks are "One" in that order', started('One'))
+    })
+
+    RuleScenario('Waiting outranks the lane', ({ Given, And, When, Then }) => {
+      Given('a queued task "Scaffold" on a sequential workflow', () =>
+        queued('Scaffold', 'sequential'),
+      )
+      And('a queued task "The model" on a sequential workflow', () =>
+        queued('The model', 'sequential'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      When('the scheduler ticks', ticks)
+      Then(
+        '"The model" was skipped because "a task it depends on is not done"',
+        skippedBecause('The model', 'a task it depends on is not done'),
+      )
+    })
+
+    RuleScenario('Waiting outranks the shared checkout', ({ Given, And, When, Then }) => {
+      Given('a project "api" that works in its own checkout', () => givenProject('api', false))
+      And('a queued task "Scaffold" in "api"', () => queuedIn('Scaffold', 'api'))
+      And('a queued task "The model" in "api"', () => queuedIn('The model', 'api'))
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      When('the scheduler ticks', ticks)
+      Then(
+        '"The model" was skipped because "a task it depends on is not done"',
+        skippedBecause('The model', 'a task it depends on is not done'),
+      )
+    })
+
+    RuleScenario('Capacity still comes first', ({ Given, And, When, Then }) => {
+      Given('the cap is 1', () => {
+        cap = 1
+        build()
+      })
+      And('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      When('the scheduler ticks', ticks)
+      Then('"The model" was skipped because "at capacity"', skippedBecause('The model', 'at capacity'))
+    })
+
+    RuleScenario('A cancelled blocker blocks its dependent', ({ Given, And, When, Then }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('"Scaffold" is cancelled', () => {
+        tasks.act(idOf('Scaffold'), 'cancel')
+      })
+      When('the scheduler ticks', ticks)
+      Then('"The model" is "blocked"', isState('The model', 'blocked'))
+      And('the tick reports blocking "The model"', () =>
+        expect(report.blocked.map((entry) => entry.name)).toEqual(['The model']),
+      )
+      And('the reason for "The model" says "Scaffold" was cancelled', () =>
+        expect(tasks.get(idOf('The model'))?.blockedReason).toBe(
+          '"Scaffold" was cancelled, so this cannot start.',
+        ),
+      )
+    })
+
+    RuleScenario('A blocked blocker blocks its dependent', ({ Given, And, When, Then }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('"Scaffold" is blocked', () => {
+        tasks.act(idOf('Scaffold'), 'block', { reason: 'the tests failed' })
+      })
+      When('the scheduler ticks', ticks)
+      Then('"The model" is "blocked"', isState('The model', 'blocked'))
+      And('the reason for "The model" says "Scaffold" is blocked', () =>
+        expect(tasks.get(idOf('The model'))?.blockedReason).toBe(
+          '"Scaffold" is blocked, so this cannot start.',
+        ),
+      )
+    })
+
+    RuleScenario('A dependent taken out of the queue is not also reported as skipped', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('"Scaffold" is cancelled', () => {
+        tasks.act(idOf('Scaffold'), 'cancel')
+      })
+      When('the scheduler ticks', ticks)
+      Then('nothing was skipped', () => expect(report.skipped).toEqual([]))
+    })
+
+    RuleScenario('Retrying the blocker puts the dependent back to waiting', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('"Scaffold" is cancelled', () => {
+        tasks.act(idOf('Scaffold'), 'cancel')
+      })
+      And('the scheduler ticks', ticks)
+      When('"Scaffold" is queued again', () => {
+        tasks.act(idOf('Scaffold'), 'queue')
+      })
+      And('"The model" is retried', () => {
+        tasks.act(idOf('The model'), 'retry')
+      })
+      And('the scheduler ticks again', ticks)
+      Then('the started tasks are "Scaffold" in that order', started('Scaffold'))
+      And(
+        '"The model" was skipped because "a task it depends on is not done"',
+        skippedBecause('The model', 'a task it depends on is not done'),
+      )
+    })
+
+    RuleScenario('A blocker archived after finishing is done enough', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('"Scaffold" is done', () => {
+        tasks.act(idOf('Scaffold'), 'mark_done')
+      })
+      When('"Scaffold" is archived', () => {
+        tasks.act(idOf('Scaffold'), 'archive')
+      })
+      And('the scheduler ticks', ticks)
+      Then('"The model" is started', () => expect(startedNames()).toEqual(['The model']))
+    })
+
+    RuleScenario('A blocker archived without finishing is a dead end', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('"Scaffold" is cancelled', () => {
+        tasks.act(idOf('Scaffold'), 'cancel')
+      })
+      When('"Scaffold" is archived', () => {
+        tasks.act(idOf('Scaffold'), 'archive')
+      })
+      And('the scheduler ticks', ticks)
+      Then('"The model" is "blocked"', isState('The model', 'blocked'))
+    })
+
+    RuleScenario('A dead blocker settles it even while another is still going', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('a queued task "Scaffold" on a parallel workflow', () =>
+        queued('Scaffold', 'parallel'),
+      )
+      And('a queued task "Groundwork" on a parallel workflow', () =>
+        queued('Groundwork', 'parallel'),
+      )
+      And('a queued task "The model" on a parallel workflow', () =>
+        queued('The model', 'parallel'),
+      )
+      And('"The model" waits for "Scaffold"', waitsFor('The model', 'Scaffold'))
+      And('"The model" waits for "Groundwork"', waitsFor('The model', 'Groundwork'))
+      And('"Scaffold" is cancelled', () => {
+        tasks.act(idOf('Scaffold'), 'cancel')
+      })
+      When('the scheduler ticks', ticks)
+      Then('"The model" is "blocked"', isState('The model', 'blocked'))
+      And('the reason for "The model" says "Scaffold" was cancelled', () =>
+        expect(tasks.get(idOf('The model'))?.blockedReason).toBe(
+          '"Scaffold" was cancelled, so this cannot start.',
+        ),
+      )
+    })
+  })
 })

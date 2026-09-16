@@ -529,7 +529,7 @@ export class TaskRepository {
       // stored graph is acyclic by construction. Walked with the edge already
       // hypothetically in place.
       const edges = [
-        ...this.#allEdges(),
+        ...this.dependencies(),
         { taskId: id, dependsOn: blockerId },
       ]
       // Every node in the graph, not just this task: `queueOrder` follows only
@@ -591,8 +591,14 @@ export class TaskRepository {
     })
   }
 
-  /** Every edge there is. Only the ring check needs this, and only per write. */
-  #allEdges(): TaskEdge[] {
+  /**
+   * Every edge there is.
+   *
+   * Whole-table on purpose. The ring check needs it per write, and the
+   * scheduler needs it once a tick to gate every queued task at once — asking
+   * per task would read the same table N times to answer one question.
+   */
+  dependencies(): TaskEdge[] {
     return this.#db
       .all<{ task_id: string; depends_on_id: string }>(
         'SELECT task_id, depends_on_id FROM task_dependencies ORDER BY rowid',

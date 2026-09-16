@@ -1,8 +1,8 @@
 Feature: Deciding what runs next
   The scheduler is the only thing that decides which queued task starts. It
-  answers four questions — is there room, is the working copy free, is this
-  task's lane free, and what is next in the queue — and it says out loud why
-  anything it passed over was passed over.
+  answers five questions — is there room, is what this task waits for done, is
+  the working copy free, is this task's lane free, and what is next in the
+  queue — and it says out loud why anything it passed over was passed over.
 
   That last part is the point. The prototype's scheduler was a loop with early
   returns, and "why is nothing running?" could only be answered by reading it.
@@ -250,3 +250,168 @@ Feature: Deciding what runs next
       When the scheduler ticks
       Then the started tasks are "Api one, Web one" in that order
       And "Api two" was skipped because "a sequential workflow is already running"
+
+  Rule: a task waits for the tasks it depends on
+
+    Queueing always works. The holding happens here, which is what lets a
+    person queue ten tasks in dependency order and walk away rather than
+    queueing one and watching for it to finish.
+
+    A blocker that can never finish is different in kind from one that has not
+    finished yet. Waiting for something cancelled is not waiting, it is
+    stalling, so the dependent leaves the queue and says why.
+
+    Scenario: A task waits for its blocker
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      When the scheduler ticks
+      Then the started tasks are "Scaffold" in that order
+      And "The model" was skipped because "a task it depends on is not done"
+      And "The model" is "queued"
+
+    Scenario: The skip names the blocker
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      When the scheduler ticks
+      # "Nothing is running and nothing says why" was the prototype's whole
+      # problem. A reason without the name is only half an answer.
+      Then the skip detail for "The model" names "Scaffold"
+
+    Scenario: It starts once the blocker is done
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And the scheduler ticks
+      When "Scaffold" is done
+      And the scheduler ticks again
+      Then "The model" is started
+
+    Scenario: A task with no dependencies is unaffected
+      Given a queued task "Add due dates" on a parallel workflow
+      When the scheduler ticks
+      Then "Add due dates" is started
+
+    Scenario: Two tasks waiting for the same blocker both go when it is done
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And a queued task "The view" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And "The view" waits for "Scaffold"
+      And the scheduler ticks
+      When "Scaffold" is done
+      And the scheduler ticks again
+      # The parallelism a project asks for: nothing here makes siblings queue
+      # behind each other.
+      Then the started tasks are "The model, The view" in that order
+
+    Scenario: A chain runs one at a time in order
+      Given a queued task "One" on a parallel workflow
+      And a queued task "Two" on a parallel workflow
+      And a queued task "Three" on a parallel workflow
+      And "Two" waits for "One"
+      And "Three" waits for "Two"
+      When the scheduler ticks
+      Then the started tasks are "One" in that order
+
+    Scenario: Waiting outranks the lane
+      Given a queued task "Scaffold" on a sequential workflow
+      And a queued task "The model" on a sequential workflow
+      And "The model" waits for "Scaffold"
+      When the scheduler ticks
+      # Both are true. The blocker is a task of theirs in the same project and
+      # something they can act on; the lane names whatever happens to be
+      # running somewhere else.
+      Then "The model" was skipped because "a task it depends on is not done"
+
+    Scenario: Waiting outranks the shared checkout
+      Given a project "api" that works in its own checkout
+      And a queued task "Scaffold" in "api"
+      And a queued task "The model" in "api"
+      And "The model" waits for "Scaffold"
+      When the scheduler ticks
+      Then "The model" was skipped because "a task it depends on is not done"
+
+    Scenario: Capacity still comes first
+      Given the cap is 1
+      And a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      # Nothing can start at all, so there is nothing to say about what it
+      # waits for.
+      When the scheduler ticks
+      Then "The model" was skipped because "at capacity"
+
+    Scenario: A cancelled blocker blocks its dependent
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And "Scaffold" is cancelled
+      When the scheduler ticks
+      Then "The model" is "blocked"
+      And the tick reports blocking "The model"
+      And the reason for "The model" says "Scaffold" was cancelled
+
+    Scenario: A blocked blocker blocks its dependent
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And "Scaffold" is blocked
+      When the scheduler ticks
+      Then "The model" is "blocked"
+      And the reason for "The model" says "Scaffold" is blocked
+
+    Scenario: A dependent taken out of the queue is not also reported as skipped
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And "Scaffold" is cancelled
+      When the scheduler ticks
+      Then nothing was skipped
+
+    Scenario: Retrying the blocker puts the dependent back to waiting
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And "Scaffold" is cancelled
+      And the scheduler ticks
+      When "Scaffold" is queued again
+      And "The model" is retried
+      And the scheduler ticks again
+      Then the started tasks are "Scaffold" in that order
+      And "The model" was skipped because "a task it depends on is not done"
+
+    Scenario: A blocker archived after finishing is done enough
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And "Scaffold" is done
+      When "Scaffold" is archived
+      And the scheduler ticks
+      # Tidying a finished task away must not stall everything behind it.
+      Then "The model" is started
+
+    Scenario: A blocker archived without finishing is a dead end
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And "Scaffold" is cancelled
+      When "Scaffold" is archived
+      # `archived` is reachable from `done` and from `cancelled` alike, so the
+      # state alone cannot tell "finished, then put away" from "put away".
+      And the scheduler ticks
+      Then "The model" is "blocked"
+
+    Scenario: A dead blocker settles it even while another is still going
+      Given a queued task "Scaffold" on a parallel workflow
+      And a queued task "Groundwork" on a parallel workflow
+      And a queued task "The model" on a parallel workflow
+      And "The model" waits for "Scaffold"
+      And "The model" waits for "Groundwork"
+      And "Scaffold" is cancelled
+      When the scheduler ticks
+      # Waiting for something that can never come is not waiting. One dead
+      # blocker settles the question however many others are merely in flight.
+      Then "The model" is "blocked"
+      And the reason for "The model" says "Scaffold" was cancelled

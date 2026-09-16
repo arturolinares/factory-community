@@ -1,4 +1,4 @@
-import type { Scheduling, Task } from '@factory/core'
+import { dependencyStatus, type BlockerFacts, type Scheduling, type Task } from '@factory/core'
 import type { RunRepository, TaskRepository } from '@factory/store'
 import type { EventBus } from '@factory/events'
 
@@ -42,6 +42,15 @@ import type { EventBus } from '@factory/events'
  * will pick this one up. What it must never do is run anyway: the prototype's
  * gate existed precisely because a phase that assumes a worktree does damage
  * without one.
+ *
+ * Dependencies are the fourth, and the newest. A task can be made to wait for
+ * another, and a queued task whose blockers are not done yet is passed over
+ * with the blocker named. Queueing always works and the holding happens here —
+ * that is what lets a person queue ten tasks in dependency order and walk
+ * away. A blocker that can never finish is different in kind: the dependent is
+ * moved to `blocked` with the reason, because leaving it in the queue would
+ * park it for ever looking like it was about to run, which is the one thing the
+ * board exists to make obvious.
  */
 
 /** How many tasks may be running at once when nothing says otherwise. */
@@ -138,6 +147,7 @@ export type SkipReason =
   | 'a sequential workflow is already running'
   | 'a required flag is not set'
   | 'waiting for its next iteration'
+  | 'a task it depends on is not done'
 
 export interface SkippedTask {
   readonly task: Task
@@ -149,6 +159,12 @@ export interface SkippedTask {
 export interface TickReport {
   readonly started: readonly Task[]
   readonly skipped: readonly SkippedTask[]
+  /**
+   * Tasks this tick took out of the queue, because what they were waiting for
+   * can never finish. Separate from `skipped`, which is about tasks left
+   * exactly as they were found.
+   */
+  readonly blocked: readonly Task[]
   readonly running: number
   readonly capacity: number
 }
@@ -194,7 +210,7 @@ export class Scheduler {
       // admitting the same task twice is exactly what the running-count guard
       // exists to prevent.
       this.#again = true
-      return { started: [], skipped: [], running: 0, capacity: 0 }
+      return { started: [], skipped: [], blocked: [], running: 0, capacity: 0 }
     }
 
     this.#ticking = true
@@ -226,6 +242,29 @@ export class Scheduler {
 
     const started: Task[] = []
     const skipped: SkippedTask[] = []
+    const blocked: Task[] = []
+
+    // The dependency graph, read once. Every queued task is gated against it,
+    // and asking per task would read the whole table over and over to answer
+    // one question. Blockers are cached for the same reason — several
+    // dependents usually wait for the same task.
+    const edges = this.#tasks.dependencies()
+    const blockers = new Map<string, Task | undefined>()
+    const blockerOf = (id: string): Task | undefined => {
+      if (!blockers.has(id)) blockers.set(id, this.#tasks.get(id))
+      return blockers.get(id)
+    }
+    const factsOf = (id: string): BlockerFacts | undefined => {
+      const blocker = blockerOf(id)
+      if (blocker === undefined) return undefined
+      // Built by branching rather than spreading `undefined`: under
+      // exactOptionalPropertyTypes an explicitly-undefined key is not absent,
+      // and `completedAt` present-but-undefined would read as "finished".
+      return blocker.completedAt === undefined
+        ? { state: blocker.state }
+        : { state: blocker.state, completedAt: blocker.completedAt }
+    }
+    const nameOf = (id: string): string => blockerOf(id)?.name ?? id
 
     // Resumed first. A task someone approved is already running and is holding
     // a paused run: it occupies its slot either way, and nothing else would
@@ -251,6 +290,26 @@ export class Scheduler {
           task,
           reason: 'waiting for its next iteration',
           detail: `not before ${task.runnableAt}`,
+        })
+        continue
+      }
+
+      // Before the shared-checkout and lane checks, by the same doctrine: the
+      // most useful reason is the one naming something the person can act on,
+      // and a blocker is a task of theirs in the same project.
+      const dependencies = dependencyStatus(task.id, edges, factsOf)
+      if (dependencies.state === 'dead') {
+        const because = dependencies.dead
+          .map((entry) => `"${nameOf(entry.id)}" ${entry.because}`)
+          .join(' and ')
+        blocked.push(this.#tasks.act(task.id, 'block', { reason: `${because}, so this cannot start.` }))
+        continue
+      }
+      if (dependencies.state === 'waiting') {
+        skipped.push({
+          task,
+          reason: 'a task it depends on is not done',
+          detail: dependencies.waitingFor.map((id) => `"${nameOf(id)}"`).join(' and '),
         })
         continue
       }
@@ -297,7 +356,13 @@ export class Scheduler {
       this.#hand(admitted)
     }
 
-    return { started, skipped, running: running.length, capacity: Math.max(capacity, 0) }
+    return {
+      started,
+      skipped,
+      blocked,
+      running: running.length,
+      capacity: Math.max(capacity, 0),
+    }
   }
 
   /** Hand a task to the engine, and make sure nothing is left looking busy. */

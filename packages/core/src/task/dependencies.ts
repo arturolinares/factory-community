@@ -59,7 +59,13 @@ export interface DependencyStatus {
   readonly state: DependencyState
   /** Blockers not done yet, that still could be. */
   readonly waitingFor: readonly string[]
-  /** Blockers that can never be done, and why each one cannot. */
+  /**
+   * Blockers that can never be done, and why each one cannot.
+   *
+   * `because` is a predicate, written to follow the blocker's name: every
+   * caller has that name and none of them wants a sentence that starts with a
+   * pronoun — `"Task 2" was cancelled, so this cannot start.`
+   */
   readonly dead: readonly { readonly id: string; readonly because: string }[]
 }
 
@@ -96,21 +102,21 @@ export function dependencyStatus(
       // Deleting a task cascades its edges away, so this needs a hand-edited
       // database to reach. Dead rather than ignored: a blocker nobody can find
       // is a blocker that will never be done, and silently starting is worse.
-      dead.push({ id, because: 'it no longer exists' })
+      dead.push({ id, because: 'no longer exists' })
       continue
     }
     if (facts.state === 'done') continue
     if (facts.state === 'archived') {
       if (facts.completedAt !== undefined) continue
-      dead.push({ id, because: 'it was archived without finishing' })
+      dead.push({ id, because: 'was archived without finishing' })
       continue
     }
     if (facts.state === 'cancelled') {
-      dead.push({ id, because: 'it was cancelled' })
+      dead.push({ id, because: 'was cancelled' })
       continue
     }
     if (facts.state === 'blocked') {
-      dead.push({ id, because: 'it is blocked' })
+      dead.push({ id, because: 'is blocked' })
       continue
     }
     waitingFor.push(id)
