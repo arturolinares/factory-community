@@ -9,7 +9,7 @@ import {
   type WorkflowFacts,
 } from '@factory/engine'
 import { definitionPath, planWorkflow, resolveWorkflow } from '@factory/config'
-import { artifactsRoot, taskTokenValues, workspaceFor } from '@factory/core'
+import { artifactsRoot, systemCanonical, taskTokenValues, workspaceFor } from '@factory/core'
 import type { FAILURE_TOKENS, PROJECT_TOKENS } from '@factory/core'
 import { createChains, type Chains } from './chains.js'
 import {
@@ -152,6 +152,9 @@ export async function createService(
         host: runtime.host,
         workflow,
         workspace: workspacePathFor(task),
+        // The daemon has a filesystem, so the boundary check gets the answer
+        // that includes symlinks rather than the lexical one core falls back to.
+        canonical: systemCanonical,
         // Forwarded, not decided here: the engine owns the session's lifecycle
         // because it is the only thing that sees both the task's recorded one
         // and the run about to start.

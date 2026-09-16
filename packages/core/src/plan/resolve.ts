@@ -15,6 +15,13 @@ import type { Approval, Phase } from '../schema/phase.js'
 import { artifactFile, artifactsRoot, joinPath } from '../task/paths.js'
 import type { Scheduling, Workflow, WorkflowMode } from '../schema/workflow.js'
 import { substituteDeep, type VariableScope } from './variables.js'
+import {
+  lexicalCanonical,
+  outsideWorkspaceMessage,
+  withinWorkspace,
+  type Canonicalise,
+} from '../security/boundary.js'
+import { DEFAULT_PROFILE, isConfined, type ExecutionProfile } from '../security/profile.js'
 import { blankTaskTokens } from './tokens.js'
 
 /**
@@ -72,6 +79,23 @@ export interface PlanRequest {
    * session at all, which is what a preview and an in-memory plan get.
    */
   readonly session?: { readonly id: string; readonly started: boolean }
+  /**
+   * How much authority this run gets. Defaults to `default`.
+   *
+   * Read here for one reason: a phase may name a working directory, and whether
+   * a directory outside the workspace is a refusal or a warning is the profile's
+   * decision. Everything else the profile affects is decided at render time.
+   */
+  readonly profile?: ExecutionProfile
+  /**
+   * How to resolve a path before comparing it to the workspace.
+   *
+   * Defaults to the lexical one, so planning still needs no filesystem —
+   * `--dry-run`, a preview and an in-memory plan all get the `..` check. A
+   * caller that has a filesystem passes `systemCanonical` and also gets
+   * symlinks.
+   */
+  readonly canonical?: Canonicalise
 }
 
 export interface ResolvedStep {
@@ -128,6 +152,8 @@ export interface PlanResult {
 
 export function resolvePlan(request: PlanRequest): PlanResult {
   const { workflow, lookupPhase, lookupAgent, host, workspace } = request
+  const profile = request.profile ?? DEFAULT_PROFILE
+  const canonical = request.canonical ?? lexicalCanonical
   // One answer for the whole plan, so every step agrees about where artifacts
   // go — including the fallback, which two separate derivations could disagree
   // on the moment one of them forgot it existed.
@@ -183,6 +209,29 @@ export function resolvePlan(request: PlanRequest): PlanResult {
     }
 
     const cwd = phase.workingDir === undefined ? workspace : join(workspace, phase.workingDir)
+
+    // A phase may say where its steps run, and until now nothing checked where
+    // that was. `joinPath` lets an absolute part restart the path — so
+    // `working_dir: /tmp` ran in `/tmp`, with the workspace discarded — and a
+    // `..` climb was never normalised. The schema is `z.string().min(1)`, so
+    // neither was caught anywhere.
+    //
+    // An error rather than a clamp: silently rewriting somebody's `working_dir`
+    // to somewhere they did not name would run their steps in the wrong
+    // directory, and a workflow that meant it should hear so. Under Full
+    // Access it is their stated choice, so it is a warning and it runs.
+    if (phase.workingDir !== undefined && !withinWorkspace(cwd, workspace, canonical)) {
+      problems.push({
+        severity: isConfined(profile) ? 'error' : 'warning',
+        message: outsideWorkspaceMessage(
+          `The working directory of phase "${phaseName}"`,
+          canonical(cwd),
+          canonical(workspace),
+        ),
+        field: `${phaseName}.working_dir`,
+        rule: 'plan.outsideWorkspace',
+      })
+    }
     const steps: ResolvedStep[] = []
 
     phase.steps.forEach((step, index) => {

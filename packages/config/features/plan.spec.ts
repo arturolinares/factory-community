@@ -12,6 +12,7 @@ import {
   PROJECT_TOKENS,
   TASK_TOKENS,
   tokenDictionary,
+  type ExecutionProfile,
   type PlanResult,
   type ResolvedPhase,
   type TaskContext,
@@ -930,6 +931,113 @@ describeFeature(feature, ({ Background, Rule, Scenario, BeforeEachScenario, Afte
           agentSteps().every((step) => !step.planned.args.join(' ').includes('--session-id')),
         ).toBe(true)
       })
+    })
+  })
+
+  Rule('a phase runs inside the workspace, or the plan is refused', ({ RuleScenario }) => {
+    const phaseIn = (name: string, workingDir: string) => (): void => {
+      box.phase(
+        project,
+        name,
+        `name: ${name}\nworking_dir: ${workingDir}\nsteps: [{run: npm test}]\n`,
+      )
+    }
+    const planAs = (profile: ExecutionProfile) => (): void => {
+      const chain = resolveScopes({
+        cwd: box.dir('work', 'src'),
+        env: { FACTORY_HOME: box.scope('home', 'user') },
+      })
+      result = planWorkflow({ chain, host, workflow: 'site', workspace: box.dir('work'), profile })
+    }
+    const named = (severity: 'error' | 'warning') => (): void => {
+      const matching = result.problems.filter(
+        (problem) =>
+          problem.severity === severity && problem.rule === 'plan.outsideWorkspace',
+      )
+      expect(matching).toHaveLength(1)
+      expect(matching[0]?.field).toContain('working_dir')
+    }
+
+    RuleScenario('A relative working directory inside the workspace is fine', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given(
+        'the project scope defines a phase "web-build" with working directory "web"',
+        phaseIn('web-build', 'web'),
+      )
+      And('the project scope defines a workflow "site" with the phase "web-build"', () =>
+        workflow('site', 'web-build'),
+      )
+      When('the workflow "site" is planned', () => plan('site'))
+      Then('planning succeeds', () => expect(errors()).toEqual([]))
+    })
+
+    RuleScenario('An absolute working directory is refused', ({ Given, And, When, Then }) => {
+      Given(
+        'the project scope defines a phase "escape" with working directory "/tmp"',
+        phaseIn('escape', '/tmp'),
+      )
+      And('the project scope defines a workflow "site" with the phase "escape"', () =>
+        workflow('site', 'escape'),
+      )
+      When('the workflow "site" is planned', () => plan('site'))
+      Then('planning fails', () => expect(result.plan).toBeUndefined())
+      And("a problem names the phase's working directory", named('error'))
+      And('the problem says which profile allows it', () => {
+        expect(anyMessage('Full Access')).toBe(true)
+      })
+    })
+
+    RuleScenario('A working directory that climbs out is refused', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given(
+        'the project scope defines a phase "escape" with working directory "../../elsewhere"',
+        phaseIn('escape', '../../elsewhere'),
+      )
+      And('the project scope defines a workflow "site" with the phase "escape"', () =>
+        workflow('site', 'escape'),
+      )
+      When('the workflow "site" is planned', () => plan('site'))
+      Then('planning fails', () => expect(result.plan).toBeUndefined())
+      And("a problem names the phase's working directory", named('error'))
+    })
+
+    RuleScenario('A working directory that climbs out and back is fine', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given(
+        'the project scope defines a phase "web-build" with working directory "../work/web"',
+        phaseIn('web-build', '../work/web'),
+      )
+      And('the project scope defines a workflow "site" with the phase "web-build"', () =>
+        workflow('site', 'web-build'),
+      )
+      When('the workflow "site" is planned', () => plan('site'))
+      Then('planning succeeds', () => expect(errors()).toEqual([]))
+    })
+
+    RuleScenario('Full Access allows it and says so', ({ Given, And, When, Then }) => {
+      Given(
+        'the project scope defines a phase "escape" with working directory "/tmp"',
+        phaseIn('escape', '/tmp'),
+      )
+      And('the project scope defines a workflow "site" with the phase "escape"', () =>
+        workflow('site', 'escape'),
+      )
+      When('the workflow "site" is planned under Full Access', planAs('full-access'))
+      Then('planning succeeds', () => expect(errors()).toEqual([]))
+      And("a warning names the phase's working directory", named('warning'))
+      And('phase "escape" runs in "/tmp"', () => expect(phase('escape')?.cwd).toBe('/tmp'))
     })
   })
 })

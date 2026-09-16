@@ -299,3 +299,53 @@ Feature: Definitions become a runnable plan
       When the workflow "review" is planned
       Then planning succeeds
       And no step mentions a session
+
+  Rule: a phase runs inside the workspace, or the plan is refused
+
+    `working_dir` is honoured, which the rule above establishes. Nothing checked
+    where it pointed. `joinPath` lets an absolute part restart the path, so
+    `working_dir: /tmp` discarded the workspace and ran in `/tmp`, and a `..`
+    climb was never normalised — and the schema is `z.string().min(1)`, so
+    neither was caught anywhere else either.
+
+    An error rather than a clamp. Quietly rewriting somebody's `working_dir` to
+    a directory they did not name would run their steps in the wrong place, and
+    a workflow that meant it should hear so. Under Full Access it is a stated
+    choice, so it is a warning and it runs.
+
+    Scenario: A relative working directory inside the workspace is fine
+      Given the project scope defines a phase "web-build" with working directory "web"
+      And the project scope defines a workflow "site" with the phase "web-build"
+      When the workflow "site" is planned
+      Then planning succeeds
+
+    Scenario: An absolute working directory is refused
+      Given the project scope defines a phase "escape" with working directory "/tmp"
+      And the project scope defines a workflow "site" with the phase "escape"
+      When the workflow "site" is planned
+      Then planning fails
+      And a problem names the phase's working directory
+      And the problem says which profile allows it
+
+    Scenario: A working directory that climbs out is refused
+      Given the project scope defines a phase "escape" with working directory "../../elsewhere"
+      And the project scope defines a workflow "site" with the phase "escape"
+      When the workflow "site" is planned
+      Then planning fails
+      And a problem names the phase's working directory
+
+    Scenario: A working directory that climbs out and back is fine
+      Given the project scope defines a phase "web-build" with working directory "../work/web"
+      And the project scope defines a workflow "site" with the phase "web-build"
+      When the workflow "site" is planned
+      # The check is on the resolved path, so a route that leaves and returns is
+      # not an escape — only a destination outside is.
+      Then planning succeeds
+
+    Scenario: Full Access allows it and says so
+      Given the project scope defines a phase "escape" with working directory "/tmp"
+      And the project scope defines a workflow "site" with the phase "escape"
+      When the workflow "site" is planned under Full Access
+      Then planning succeeds
+      And a warning names the phase's working directory
+      And phase "escape" runs in "/tmp"

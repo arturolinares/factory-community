@@ -39,6 +39,37 @@ const trimEnd = (path: string): string =>
   path.length > 1 && path.endsWith(SEPARATOR) ? path.replace(/\/+$/, '') : path
 
 /**
+ * Resolve `.` and `..` without asking the filesystem anything.
+ *
+ * The default for callers that have no filesystem — `--dry-run`, a preview, an
+ * in-memory plan — because the alternative default is no canonicalisation at
+ * all, and a boundary check on the written path is a boundary check that passes
+ * `<workspace>/../secrets`.
+ *
+ * It answers less than `systemCanonical`: it cannot see a symlink. That is the
+ * honest division — this catches the path that *says* it climbs out, and the
+ * real one also catches the path that does it quietly.
+ *
+ * A relative path comes back unchanged. Resolving one needs a current
+ * directory, and core is not allowed to know what that is.
+ */
+export const lexicalCanonical: Canonicalise = (path) => {
+  if (!path.startsWith(SEPARATOR)) return path
+  const resolved: string[] = []
+  for (const segment of path.split(SEPARATOR)) {
+    if (segment === '' || segment === '.') continue
+    // Climbing above the root stays at the root, which is what every resolver
+    // does — and means `/..` cannot be used to reach a shorter prefix.
+    if (segment === '..') {
+      resolved.pop()
+      continue
+    }
+    resolved.push(segment)
+  }
+  return SEPARATOR + resolved.join(SEPARATOR)
+}
+
+/**
  * Whether `candidate` is the workspace or something under it.
  *
  * The workspace itself counts — a step running in the project root is the

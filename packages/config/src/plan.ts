@@ -1,4 +1,10 @@
-import type { CapabilityLookup, PlanResult, TaskContext } from '@factory/core'
+import type {
+  Canonicalise,
+  CapabilityLookup,
+  ExecutionProfile,
+  PlanResult,
+  TaskContext,
+} from '@factory/core'
 import { resolvePlan } from '@factory/core'
 import type { ScopeChain } from './scopes.js'
 import { resolveAgent, resolvePhase, resolveWorkflow } from './store.js'
@@ -23,6 +29,10 @@ export function planWorkflow(options: {
   defaultProvider?: string
   /** The agent session this plan's steps share. See `PlanRequest.session`. */
   session?: { readonly id: string; readonly started: boolean }
+  /** How much authority this run gets. See `PlanRequest.profile`. */
+  profile?: ExecutionProfile
+  /** How to resolve a path before comparing it to the workspace. */
+  canonical?: Canonicalise
 }): PlanResult {
   const resolved = resolveWorkflow(options.chain, options.workflow)
 
@@ -57,5 +67,7 @@ export function planWorkflow(options: {
     ...(options.project === undefined ? {} : { project: options.project }),
     ...(options.defaultProvider === undefined ? {} : { defaultProvider: options.defaultProvider }),
     ...(options.session === undefined ? {} : { session: options.session }),
+    ...(options.profile === undefined ? {} : { profile: options.profile }),
+    ...(options.canonical === undefined ? {} : { canonical: options.canonical }),
   })
 }

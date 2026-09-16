@@ -130,3 +130,39 @@ Feature: What counts as inside the workspace
       Then the reason names "/tmp"
       And the reason names "/repos/todolist"
       And the reason says which profile allows it
+
+  Rule: the lexical resolver is the default, and answers less
+
+    Planning happens without a filesystem — `--dry-run`, a preview, an
+    in-memory plan — so the default resolver cannot be the one that calls
+    `realpath`. It must still be a resolver, though: the alternative default is
+    no canonicalisation at all, and a boundary check on the written path passes
+    `<workspace>/../secrets`.
+
+    So it resolves `.` and `..` and nothing else, and the division is stated
+    rather than discovered: this catches the path that *says* it climbs out, and
+    the real one also catches the path that does it quietly.
+
+    Scenario: It removes a "." segment
+      When I lexically resolve "/repos/./todolist"
+      Then the result is "/repos/todolist"
+
+    Scenario: It resolves a ".." segment
+      When I lexically resolve "/repos/todolist/../secrets"
+      Then the result is "/repos/secrets"
+
+    Scenario: It collapses repeated separators
+      When I lexically resolve "/repos//todolist///src"
+      Then the result is "/repos/todolist/src"
+
+    Scenario: Climbing above the root stays at the root
+      When I lexically resolve "/../../etc"
+      # What every resolver does, and it matters here: otherwise ".." could be
+      # used to reach a shorter prefix than the workspace.
+      Then the result is "/etc"
+
+    Scenario: A relative path is left alone
+      When I lexically resolve "web/dist"
+      # Resolving one needs a current directory, and core is not allowed to know
+      # what that is.
+      Then the result is "web/dist"

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import {
+  lexicalCanonical,
   outsideWorkspaceMessage,
   systemCanonical,
   withinWorkspace,
@@ -20,6 +21,7 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario, AfterEachScenari
   let inside: boolean | undefined
   let reason: string
   let temporary: string | undefined
+  let resolvedPath: string
 
   BeforeEachScenario(() => {
     workspace = ''
@@ -27,6 +29,7 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario, AfterEachScenari
     inside = undefined
     reason = ''
     temporary = undefined
+    resolvedPath = ''
   })
 
   AfterEachScenario(() => {
@@ -209,6 +212,43 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario, AfterEachScenari
       And('the reason says which profile allows it', () =>
         expect(reason).toContain('Full Access'),
       )
+    })
+  })
+
+  Rule('the lexical resolver is the default, and answers less', ({ RuleScenario }) => {
+    const lexically = (path: string) => (): void => {
+      resolvedPath = lexicalCanonical(path)
+    }
+    const resultIs = (expected: string) => (): void => {
+      expect(resolvedPath).toBe(expected)
+    }
+
+    RuleScenario('It removes a "." segment', ({ When, Then }) => {
+      When('I lexically resolve "/repos/./todolist"', lexically('/repos/./todolist'))
+      Then('the result is "/repos/todolist"', resultIs('/repos/todolist'))
+    })
+
+    RuleScenario('It resolves a ".." segment', ({ When, Then }) => {
+      When(
+        'I lexically resolve "/repos/todolist/../secrets"',
+        lexically('/repos/todolist/../secrets'),
+      )
+      Then('the result is "/repos/secrets"', resultIs('/repos/secrets'))
+    })
+
+    RuleScenario('It collapses repeated separators', ({ When, Then }) => {
+      When('I lexically resolve "/repos//todolist///src"', lexically('/repos//todolist///src'))
+      Then('the result is "/repos/todolist/src"', resultIs('/repos/todolist/src'))
+    })
+
+    RuleScenario('Climbing above the root stays at the root', ({ When, Then }) => {
+      When('I lexically resolve "/../../etc"', lexically('/../../etc'))
+      Then('the result is "/etc"', resultIs('/etc'))
+    })
+
+    RuleScenario('A relative path is left alone', ({ When, Then }) => {
+      When('I lexically resolve "web/dist"', lexically('web/dist'))
+      Then('the result is "web/dist"', resultIs('web/dist'))
     })
   })
 })
