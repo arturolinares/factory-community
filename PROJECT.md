@@ -15,17 +15,22 @@ This document is the source of truth, written as the project is built.
 
 ## Status
 
-**Seventeen increments in, and the whole loop works**: author a workflow in the browser or by hand,
+**Eighteen increments in, and the whole loop works**: author a workflow in the browser or by hand,
 point a task at a repository, queue it, and the daemon gives it a worktree, runs the agents, keeps
 what they printed and what they produced, stops at the gate you asked for, and continues when you
 approve. From a terminal, from the board, or from Pro's desktop app — the same API either way.
-**4,762 Gherkin steps green below the browser** across 49 feature files and 1,012 scenarios, 132 of
+**5,449 Gherkin steps green below the browser** across 50 feature files and 1,107 scenarios, 150 of
 them in a real browser, and smoke runs against the real agent CLIs.
 
 Since increment 17 an agent is also **confined to the workspace it was given**, handed an
 environment with the credentials taken out, and stoppable — process tree and all. What that
 guarantees, and where it stops, is [`docs/security/`](docs/security/); the short version is that
 Factory is not a sandbox and says so.
+
+Since increment 18 a task can **wait for another task**, so a project's order lives in the project
+rather than in somebody's head: declare the graph, press *Queue all*, and the scheduler starts each
+task when what it waits for is done. *Stop all* halts a project's work in one request.
+[`docs/task-dependencies.md`](docs/task-dependencies.md) is the whole feature.
 
 `factory setup` is where a new machine starts: what is still missing, and the command that fixes
 each one. It is a registry, so the answer comes from whoever knows it — the provider plugins, the
@@ -628,6 +633,83 @@ over the board on load and blocked reading; and accepting it dismissed the panel
 without doing the thing that had been refused, while the button said *Continue*.
 Both are guarded — reverting either fails the scenario that found it.
 
+## Increment 18 — one task waiting for another
+
+| # | What | State |
+|--:|------|-------|
+| 78 | **A task dependency graph** in core: met, waiting, dead, and an order to queue in | ✅ done |
+| 79 | **The relation in the store**, with itself, cross-project and rings refused at the door | ✅ done |
+| 80 | **`mark_done`** — a person may finish a task by hand; `block` now reaches a queued task | ✅ done |
+| 81 | **The scheduler holds a dependent**, and blocks one whose blocker can never finish | ✅ done |
+| 82 | **What a task waits for, served** — derived per request, never stored | ✅ done |
+| 83 | **Queue all and Stop all**, per project, one request each | ✅ done |
+| 84 | **The board and the task page** — the header names the project, a row says what it waits for | ✅ done |
+| 85 | **`factory task depends` and `factory project queue|stop`** | ✅ done |
+
+`todolist`'s own `PROJECT.md` lists ten tasks with a dependency column, and it is
+a **graph rather than a chain** — "tasks 3 and 4 can run at the same time; so can
+7 and 8". Factory had nowhere to put that, so the order lived in somebody's head
+and was enforced by queueing one task and watching.
+
+**Exploration found no home for this, and two traps.** `needs`/`resolveNeeds`
+relates workflow definitions *within one task's plan*, and the scheduler
+explicitly refuses to gate on it. Flags are keyed `(task_id, flag)` and written
+only by the engine onto the task whose own run just finished — and
+`engine/src/doctor.ts` carries a comment left specifically to stop somebody
+doing this: *"Flags belong to one task… no later workflow can set the flag in
+time, and nothing else can set it at all."* Fourteen migrations and no `tasks`
+column referenced `tasks`. So the relation is new; what is reused is the
+scheduler's admission funnel, its `SkipReason` vocabulary and the single-door
+`act`.
+
+Decisions, taken because each had a defensible alternative:
+
+- **Queueing always works; the scheduler holds.** The alternative — refusing to
+  queue until the blockers are done — would make *Queue all* meaningless and
+  keep a person at the keyboard, which is the thing this increment is for.
+- **Dependencies are declared, never inferred.** Nothing reads branches, ticket
+  ids or names. A guessed edge that is wrong is worse than no edge.
+- **A ring is refused at the door.** The store is the only writer, so the stored
+  graph is acyclic by construction — which is what lets `queueOrder` treat a
+  ring as corruption rather than as an ordinary outcome to design around. The
+  batch route still refuses one, because the walk cannot place a ring's members
+  and carrying on would queue everything else and silently leave those out.
+- **A dead blocker blocks its dependent.** Waiting for something cancelled is
+  not waiting, it is stalling. `block` gained `queued` for this, and stays
+  internal — a person has cancel.
+- **`mark_done` is a separate action, not `complete` with its `internal` lifted.**
+  `complete` is `from: ['running']`, so lifting it would offer the button on
+  exactly the one state that corrupts things: the agent keeps going, the run row
+  still says `running`, and the engine's own completion throws when it gets
+  there.
+- **Stop all leaves drafts and blocked tasks alone**, unlike the plan it was
+  built from and unlike the global kill switch. Neither is happening, both are
+  what *Queue all* picks up from, and one click must not quietly clear work
+  somebody planned but never started.
+
+**Two API changes:**
+
+- `POST /api/projects/:id/queue` returns `{ queued, skipped }`, 409 with the
+  disclaimer until an installation has accepted it, and 409 with `problems` for
+  a ring. `POST /api/projects/:id/stop` returns
+  `{ cancelled, signalled, killed }` and is never gated.
+- `POST /api/tasks/:id/dependencies` and
+  `DELETE /api/tasks/:id/dependencies/:blockerId` add and remove one edge, and
+  pass the store's own refusal through as a 400. `GET /api/tasks` and
+  `GET /api/tasks/:id` gain `blockers: [{ id, name, status }]`, derived per
+  request the way `progress` is; `Task` gains `dependsOn: string[]`.
+
+**Three mutations survived their first round**, and each one taught something the
+scenarios were missing. The self-dependency refusal survived because the ring
+check catches a self-edge too — and explains it with "already waits for", which
+is not what happened, so the scenario now pins the self case's own wording. The
+missing-blocker check survived because leaving it out still produced a 400 — by
+leaking a `TypeError` as its message. And "dead beats waiting" survived the
+scheduler suite until a scenario gave one dependent two blockers, one cancelled
+and one still running. The ring walk had a real bug that a scenario found:
+`queueOrder` follows only the edges inside the set it is given, so checking
+`[id]` alone walked straight past a ring three tasks long.
+
 ## Glossary
 
 The vocabulary is deliberately small, and it is the vocabulary in the code.
@@ -767,15 +849,15 @@ Gherkin lives beside the contract it specifies. This index is the one place to r
 | `packages/config/features/scope-plugins.feature` | A project ships its plugins in its own repo |
 | `packages/plugins/provider-claude/features/providers.feature` | Rendering, model roles, capability awareness, conformance |
 | `packages/config/features/plan.feature` | Definitions become runnable processes; nothing executes |
-| `apps/cli/features/cli.feature` | The command surface, exit codes and output, including `factory task` |
+| `apps/cli/features/cli.feature` | The command surface, exit codes and output, including `factory task`, `factory task depends` and `factory project queue|stop` |
 | `packages/config/features/bundles.feature` | Sharing a workflow as one self-contained file |
 | `apps/daemon/features/api.feature` | The definitions API: etags, scope-aware delete, registries |
-| `apps/daemon/features/tasks-api.feature` | Tasks, runs, logs and the live stream — a queued task actually running, a project's own definitions, renaming, agents over HTTP, and when a plan may be changed |
+| `apps/daemon/features/tasks-api.feature` | Tasks, runs, logs and the live stream — a queued task actually running, a project's own definitions, renaming, agents over HTTP, when a plan may be changed, what a task waits for, and queueing or stopping a whole project |
 | `apps/web/features/definition-lists.feature` | What the pages render, in a real browser |
 | `apps/web/features/builder.feature` | Authoring a workflow or phase without writing YAML |
 | `apps/web/features/authoring.feature` | Delete, conflicts, phase references, and the YAML view |
 | `apps/web/features/sharing.feature` | Export a bundle, preview an import, resolve a clash |
-| `apps/web/features/task-board.feature` | The board: the project rail, the grouped menu, filters, both views, live updates, a task's ordered plan, renaming, environments, and the disclaimer that gates a first run |
+| `apps/web/features/task-board.feature` | The board: the project rail, the grouped menu, filters, both views, live updates, a task's ordered plan, renaming, environments, the disclaimer that gates a first run, Queue all and Stop all, and the dependency picker |
 | `packages/core/features/run.feature` | Running a plan: order, failure, deadlines, approval gates |
 | `packages/core/features/execution-profiles.feature` | Which profile applies: project over installation over `default`, and one name for each |
 | `packages/core/features/workspace-boundary.feature` | What counts as inside the workspace, including `..`, a prefix sibling and a real symlink |
@@ -786,10 +868,10 @@ Gherkin lives beside the contract it specifies. This index is the one place to r
 | `factory-pro/…/desktop-capability.feature` | Pro is a plugin: same host, same suite, no core changes |
 | `factory-pro/packages/desktop/features/shell.feature` | The desktop shell: attach or start, the menu bar, what is worth a notification |
 | `packages/store/features/store.feature` | Migrations, transactions, and the guards around both |
-| `packages/store/features/tasks.feature` | The task lifecycle: one table of moves, what each state offers, and what changing the plan does to its place in it |
+| `packages/store/features/tasks.feature` | The task lifecycle: one table of moves, what each state offers, what changing the plan does to its place in it, one task waiting for another, and finishing one by hand |
 | `packages/store/features/runs.feature` | Runs, their steps, and output kept inside a budget |
 | `packages/engine/features/engine.feature` | A task becomes runs: recording, gates, failure, and what a crash leaves |
-| `packages/engine/features/scheduler.feature` | What runs next: order, capacity, lanes read from the task's own project, and why anything was skipped |
+| `packages/engine/features/scheduler.feature` | What runs next: order, capacity, lanes read from the task's own project, a dependent held until its blockers are done, and why anything was skipped |
 | `packages/engine/features/doctor.feature` | Doctor rules that only exist where a database does |
 | `packages/store/features/projects.feature` | Projects: where work happens, checked when it is written |
 | `packages/core/features/worktree-steps.feature` | `uses: worktree` — isolation a workflow asks for, idempotently |

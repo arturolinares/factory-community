@@ -849,4 +849,279 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       )
     })
   })
+
+  Rule('the terminal can order the work as well as watch it', ({ RuleScenario }) => {
+    /**
+     * A daemon that answers the dependency routes.
+     *
+     * `/api/tasks?archived=true` is here because both ends of a dependency go
+     * through the same prefix resolution the other commands use, and that
+     * resolution asks for the listing.
+     */
+    const dependencyDaemon = (
+      answer: (path: string, method: string) => unknown,
+      tasks: Record<string, unknown>[] = [],
+    ) => (): void => {
+      asked = []
+      daemon = fakeDaemon((path, method) => {
+        if (path.startsWith('/api/tasks?')) return { items: tasks }
+        return answer(path, method)
+      })
+    }
+    const accepts = dependencyDaemon((path, method) =>
+      path.includes('/dependencies') && (method === 'POST' || method === 'DELETE')
+        ? {
+            task: task({ name: 'The model' }),
+            blockers: method === 'POST' ? [{ id: 'task-2', name: 'Scaffold' }] : [],
+          }
+        : new DaemonError(404, `unexpected ${method} ${path}`),
+    )
+    const askedFor = (method: string, fragment: string) => (): void => {
+      expect(
+        asked.some((entry) => entry.method === method && entry.path.includes(fragment)),
+      ).toBe(true)
+    }
+
+    const projects = (items: Record<string, unknown>[]) => items
+    const projectDaemon = (
+      items: Record<string, unknown>[],
+      answer: (path: string, method: string) => unknown,
+    ) => (): void => {
+      asked = []
+      daemon = fakeDaemon((path, method) => {
+        if (path === '/api/projects') return { items }
+        return answer(path, method)
+      })
+    }
+    const WORK = { id: 'pr-1', name: 'work' }
+
+    RuleScenario('One task can be made to wait for another', ({ Given, When, Then, And }) => {
+      Given('a daemon that accepts a dependency', accepts)
+      When('I run "task depends task-1 task-2"', () => invoke('task depends task-1 task-2'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says it waits for "Scaffold"', () =>
+        expect(output).toContain('The model waits for Scaffold.'),
+      )
+      And('the daemon was asked to add the dependency', askedFor('POST', '/dependencies'))
+    })
+
+    RuleScenario('The dependency can be taken back', ({ Given, When, Then, And }) => {
+      Given('a daemon that accepts a dependency', accepts)
+      When('I run "task depends task-1 task-2 --remove"', () =>
+        invoke('task depends task-1 task-2 --remove'),
+      )
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And(
+        'the daemon was asked to remove the dependency',
+        askedFor('DELETE', '/dependencies/task-2'),
+      )
+    })
+
+    RuleScenario('Both ids are resolved from a prefix', ({ Given, When, Then, And }) => {
+      Given(
+        'a daemon with two tasks and a dependency to add',
+        dependencyDaemon(
+          (path, method) =>
+            path.includes('/dependencies') && method === 'POST'
+              ? { task: task({ name: 'The model' }), blockers: [{ id: 'b', name: 'Scaffold' }] }
+              : new DaemonError(404, `unexpected ${method} ${path}`),
+          [
+            task({ id: 'task-100-full-id-0000-000000000000', name: 'The model' }),
+            task({ id: 'task-200-full-id-0000-000000000000', name: 'Scaffold' }),
+          ],
+        ),
+      )
+      When('I run "task depends task-100 task-200"', () =>
+        invoke('task depends task-100 task-200'),
+      )
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the daemon was asked about the full ids', () => {
+        const call = asked.find((entry) => entry.method === 'POST')
+        expect(call?.path).toContain('task-100-full-id-0000-000000000000')
+        expect(call?.body).toEqual({ dependsOn: 'task-200-full-id-0000-000000000000' })
+      })
+    })
+
+    RuleScenario("A refusal is passed through in the daemon's own words", ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given(
+        'a daemon that refuses a dependency as a ring',
+        dependencyDaemon(
+          () =>
+            new DaemonError(
+              400,
+              '"Scaffold" cannot wait for "The model": that would make a ring, because "The model" already waits for "Scaffold", however far around.',
+            ),
+        ),
+      )
+      When('I run "task depends task-1 task-2"', () => invoke('task depends task-1 task-2'))
+      Then('it fails', () => expect(result.exitCode).not.toBe(0))
+      And('the output says it would make a ring', () => expect(output).toContain('ring'))
+    })
+
+    RuleScenario('Asking for a dependency without both ends says so', ({ When, Then, And }) => {
+      When('I run "task depends task-1"', () => invoke('task depends task-1'))
+      Then('the exit code is 2', () => expect(result.exitCode).toBe(2))
+      And('the output mentions "waits-for-id"', () => expect(output).toContain('waits-for-id'))
+    })
+
+    RuleScenario('A task can be marked done from the terminal', ({ Given, When, Then, And }) => {
+      Given(
+        'a daemon that accepts an action',
+        dependencyDaemon((path, method) =>
+          method === 'POST' && path.includes('/actions/')
+            ? { task: task({ state: 'done' }), actions: [] }
+            : new DaemonError(404, `unexpected ${method} ${path}`),
+        ),
+      )
+      When('I run "task done task-1"', () => invoke('task done task-1'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the daemon was asked to mark it done', askedFor('POST', '/actions/mark_done'))
+    })
+
+    RuleScenario('A whole project can be queued', ({ Given, When, Then, And }) => {
+      Given(
+        'a daemon with a project to queue',
+        projectDaemon(projects([WORK]), (path, method) =>
+          path === '/api/projects/pr-1/queue' && method === 'POST'
+            ? {
+                queued: [task({ name: 'Scaffold' }), task({ name: 'The model' })],
+                skipped: [{ task: task({ name: 'Nothing planned' }), reason: 'nothing in its plan is ticked' }],
+              }
+            : new DaemonError(404, `unexpected ${method} ${path}`),
+        ),
+      )
+      When('I run "project queue work"', () => invoke('project queue work'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output lists the tasks it queued in order', () => {
+        expect(output).toContain('Queued 2 tasks in work:')
+        expect(output.indexOf('Scaffold')).toBeLessThan(output.indexOf('The model'))
+      })
+      And('the output says what it skipped', () =>
+        expect(output).toContain('nothing in its plan is ticked'),
+      )
+    })
+
+    RuleScenario('Queueing a project with nothing to queue says so', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given(
+        'a daemon with a project and nothing to queue',
+        projectDaemon(projects([WORK]), () => ({ queued: [], skipped: [] })),
+      )
+      When('I run "project queue work"', () => invoke('project queue work'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says there was nothing to queue', () =>
+        expect(output).toContain('Nothing to queue in work.'),
+      )
+    })
+
+    RuleScenario('A project is found by part of its name', ({ Given, When, Then }) => {
+      Given(
+        'a daemon with a project to queue',
+        projectDaemon(projects([WORK]), () => ({ queued: [task()], skipped: [] })),
+      )
+      When('I run "project queue wo"', () => invoke('project queue wo'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+    })
+
+    const alike = projectDaemon(
+      projects([
+        { id: 'pr-1', name: 'web' },
+        { id: 'pr-2', name: 'webhooks' },
+      ]),
+      (path, method) =>
+        path === '/api/projects/pr-1/queue' && method === 'POST'
+          ? { queued: [task({ name: 'Scaffold' })], skipped: [] }
+          : new DaemonError(404, `unexpected ${method} ${path}`),
+    )
+
+    RuleScenario('A name matching two projects is refused', ({ Given, When, Then, And }) => {
+      Given('a daemon with two projects whose names start alike', alike)
+      When('I run "project queue we"', () => invoke('project queue we'))
+      Then('it fails', () => expect(result.exitCode).not.toBe(0))
+      And('the output names both projects', () => {
+        expect(output).toContain('web')
+        expect(output).toContain('webhooks')
+      })
+    })
+
+    RuleScenario('An exact name wins over a longer one starting the same way', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('a daemon with two projects whose names start alike', alike)
+      When('I run "project queue web"', () => invoke('project queue web'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('it was "web" that was queued', () => {
+        expect(output).toContain('in web:')
+        expect(asked.some((entry) => entry.path === '/api/projects/pr-1/queue')).toBe(true)
+      })
+    })
+
+    RuleScenario('A project that is not there is refused', ({ Given, When, Then, And }) => {
+      Given(
+        'a daemon with a project to queue',
+        projectDaemon(projects([WORK]), () => ({ queued: [], skipped: [] })),
+      )
+      When('I run "project queue nowhere"', () => invoke('project queue nowhere'))
+      Then('it fails', () => expect(result.exitCode).not.toBe(0))
+      And('the output says there is no such project', () =>
+        expect(output).toContain('No project called "nowhere".'),
+      )
+    })
+
+    RuleScenario('A whole project can be stopped', ({ Given, When, Then, And }) => {
+      Given(
+        'a daemon with a project to stop',
+        projectDaemon(projects([WORK]), (path, method) =>
+          path === '/api/projects/pr-1/stop' && method === 'POST'
+            ? { cancelled: [task(), task({ name: 'Two' })], signalled: 2, killed: 0 }
+            : new DaemonError(404, `unexpected ${method} ${path}`),
+        ),
+      )
+      When('I run "project stop work"', () => invoke('project stop work'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says 2 tasks were cancelled', () =>
+        expect(output).toContain('Cancelled 2 tasks in work.'),
+      )
+    })
+
+    RuleScenario('Stopping a project where nothing runs says so', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given(
+        'a daemon with a project and nothing running',
+        projectDaemon(projects([WORK]), () => ({ cancelled: [], signalled: 0, killed: 0 })),
+      )
+      When('I run "project stop work"', () => invoke('project stop work'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says nothing was running there', () =>
+        expect(output).toContain('Nothing was running in work.'),
+      )
+    })
+
+    RuleScenario('A project command needs a name', ({ When, Then }) => {
+      When('I run "project queue"', () => invoke('project queue'))
+      Then('the exit code is 2', () => expect(result.exitCode).toBe(2))
+    })
+
+    RuleScenario('An unknown project command says what there is', ({ When, Then, And }) => {
+      When('I run "project nonsense work"', () => invoke('project nonsense work'))
+      Then('the exit code is 2', () => expect(result.exitCode).toBe(2))
+      And('the output mentions "queue"', () => expect(output).toContain('queue'))
+    })
+  })
 })

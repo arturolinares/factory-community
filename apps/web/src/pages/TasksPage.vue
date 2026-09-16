@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { useTasks } from '../stores/tasks.js'
+import { useProjects } from '../stores/projects.js'
 import PageHeader from '../components/PageHeader.vue'
 import TaskStateBadge from '../components/TaskStateBadge.vue'
 import TaskActions from '../components/TaskActions.vue'
-import type { TaskState } from '../api/client.js'
+import type { TaskListItem, TaskState } from '../api/client.js'
 
 /**
  * The board.
@@ -18,7 +19,31 @@ import type { TaskState } from '../api/client.js'
  * Rows carry the actions the daemon offered rather than a fixed set of buttons.
  */
 const store = useTasks()
-const { visible, summary, loading, error, filters, view, acting, workflows } = storeToRefs(store)
+const projects = useProjects()
+const { visible, summary, loading, error, filters, view, acting, batching, workflows } =
+  storeToRefs(store)
+
+/**
+ * The header says which board this is.
+ *
+ * It said "Tasks" whatever was chosen, and the only sign of the selection was a
+ * ring on a 40px square in the rail. The whole-project buttons make that worse:
+ * "Stop all" has to say all of *what*.
+ */
+const chosenProject = computed(() => projects.current?.name)
+
+/**
+ * Two clicks to stop everything, one to queue it.
+ *
+ * The same idiom the definition editor uses for delete, for the same reason:
+ * stopping kills agents mid-sentence and there is no undo, while queueing is
+ * undone by stopping.
+ */
+const confirmingStop = ref(false)
+const stopAll = async (): Promise<void> => {
+  confirmingStop.value = false
+  await store.stopProject()
+}
 
 const COLUMNS: TaskState[] = ['draft', 'queued', 'running', 'awaiting_approval', 'blocked', 'done']
 const HEADINGS: Record<string, string> = {
@@ -41,6 +66,9 @@ const STATES: (TaskState | 'all')[] = [
 ]
 
 const inColumn = (state: TaskState) => visible.value.filter((task) => task.state === state)
+/** The names of the blockers that have not happened yet. */
+const waitingFor = (task: TaskListItem): string[] =>
+  task.blockers.filter((blocker) => blocker.status === 'waiting').map((blocker) => blocker.name)
 const percent = (task: { progress?: { completed: number; total: number } }): number =>
   task.progress === undefined || task.progress.total === 0
     ? 0
@@ -64,7 +92,45 @@ onUnmounted(() => store.disconnect())
 </script>
 
 <template>
-  <PageHeader title="Tasks" subtitle="Everything queued, running, waiting and finished." />
+  <PageHeader
+    :title="chosenProject === undefined ? 'Tasks' : `Tasks · ${chosenProject}`"
+    subtitle="Everything queued, running, waiting and finished."
+  >
+    <!-- Only with a project chosen: the graph belongs to a project, and
+         queueing every task in every repository from one button is not
+         something anybody means. -->
+    <template v-if="chosenProject !== undefined" #actions>
+      <button
+        type="button"
+        :disabled="batching"
+        class="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-sm text-white transition-colors hover:bg-[var(--color-accent)]/85 disabled:opacity-40"
+        data-testid="queue-all"
+        @click="store.queueProject()"
+      >
+        Queue all
+      </button>
+      <button
+        v-if="!confirmingStop"
+        type="button"
+        :disabled="batching"
+        class="rounded-md border border-[var(--color-line-strong)] px-3 py-1.5 text-sm text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-danger)] disabled:opacity-40"
+        data-testid="stop-all"
+        @click="confirmingStop = true"
+      >
+        Stop all
+      </button>
+      <button
+        v-else
+        type="button"
+        :disabled="batching"
+        class="rounded-md border border-[var(--color-danger)]/50 px-3 py-1.5 text-sm text-[var(--color-danger)] disabled:opacity-40"
+        data-testid="stop-all-confirm"
+        @click="stopAll()"
+      >
+        Really stop everything?
+      </button>
+    </template>
+  </PageHeader>
 
   <div class="px-8 py-6">
     <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="summary">
@@ -192,6 +258,17 @@ onUnmounted(() => store.disconnect())
             </RouterLink>
             <p v-if="task.blockedReason" class="mt-0.5 text-xs text-[var(--color-danger)]">
               {{ task.blockedReason }}
+            </p>
+            <!-- What it is still waiting for, in the same muted-subtitle idiom
+                 the blocked reason uses. Only the blockers that have not
+                 happened: a row listing what is already done would grow a line
+                 that never goes away. -->
+            <p
+              v-if="waitingFor(task).length > 0"
+              class="mt-0.5 text-xs text-[var(--color-ink-faint)]"
+              :data-testid="`waiting-${task.name}`"
+            >
+              waiting for {{ waitingFor(task).join(', ') }}
             </p>
           </td>
           <td class="py-3 pr-4 font-mono text-xs text-[var(--color-ink-muted)]">

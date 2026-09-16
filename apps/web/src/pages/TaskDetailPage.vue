@@ -9,6 +9,7 @@ import {
   type LogView,
   type RunStep,
   type TaskDetail,
+  type TaskListItem,
   type TaskTool,
   type WorkflowChoice,
 } from '../api/client.js'
@@ -173,6 +174,78 @@ const tickEverything = (): void => {
   plan.value = plan.value.map((entry) => ({ ...entry, enabled: true }))
 }
 
+/**
+ * What this task could be made to wait for.
+ *
+ * Its own project's tasks, itself excluded. Cross-project dependencies are
+ * refused by the store — a graph spanning two repositories has no owner, and
+ * the buttons that act on one are project-level — so offering them would be
+ * offering a refusal.
+ *
+ * Tasks it already waits for are left out of the list rather than shown
+ * ticked: adding an edge twice does nothing, so a menu entry that does nothing
+ * is worse than no entry.
+ */
+const candidates = ref<TaskListItem[]>([])
+const blocking = ref(false)
+/**
+ * A refusal from the graph, shown beside the picker.
+ *
+ * Its own line rather than the page's error banner: "that would make a ring"
+ * is an answer to the control that was just used, and it belongs next to it.
+ */
+const dependencyError = ref<string | undefined>(undefined)
+const addBlocker = ref('')
+
+const waitsFor = computed(() => detail.value?.blockers ?? [])
+
+async function loadCandidates(): Promise<void> {
+  const task = detail.value?.task
+  if (task === undefined) return
+  try {
+    const all = await api.tasks({ includeArchived: false })
+    const already = new Set(task.dependsOn)
+    candidates.value = all.items.filter(
+      (other) =>
+        other.id !== task.id && other.projectId === task.projectId && !already.has(other.id),
+    )
+  } catch {
+    // The page still works without it; you simply cannot add an edge.
+    candidates.value = []
+  }
+}
+
+async function dependOn(): Promise<void> {
+  const blocker = addBlocker.value
+  if (blocker === '') return
+  blocking.value = true
+  dependencyError.value = undefined
+  try {
+    await api.dependOn(id.value, blocker)
+    addBlocker.value = ''
+    await load()
+  } catch (caught) {
+    // The daemon's sentence, which is the store's sentence. Rewording it here
+    // would be a second explanation of one rule.
+    dependencyError.value = caught instanceof ApiError ? caught.message : String(caught)
+  } finally {
+    blocking.value = false
+  }
+}
+
+async function independ(blockerId: string): Promise<void> {
+  blocking.value = true
+  dependencyError.value = undefined
+  try {
+    await api.independ(id.value, blockerId)
+    await load()
+  } catch (caught) {
+    dependencyError.value = caught instanceof ApiError ? caught.message : String(caught)
+  } finally {
+    blocking.value = false
+  }
+}
+
 let connection: LiveConnection | undefined
 let pending: ReturnType<typeof setTimeout> | undefined
 
@@ -190,6 +263,7 @@ async function load(): Promise<void> {
       planFor.value = id.value
     }
     void loadWorkflows()
+    void loadCandidates()
     error.value = undefined
     // Keep whichever run was open; otherwise show the newest, which is what
     // someone opening a task almost always wants to see.
@@ -618,6 +692,94 @@ const stepTone: Record<string, string> = {
             Discard
           </button>
         </div>
+      </section>
+
+      <!-- Beside the plan, which is the other "what will happen" control: the
+           plan says what this task will do, this says when it may start.
+
+           Not gated on having a project: the store lets two tasks that belong
+           to no project wait for each other — they are equally unowned — and a
+           control the daemon would accept has to be here, or the rule has two
+           different answers depending on where you ask. -->
+      <section data-testid="task-dependencies">
+        <h2 class="mb-2 font-mono text-[10px] tracking-wider text-[var(--color-ink-faint)] uppercase">
+          Waits for
+        </h2>
+
+        <ul v-if="waitsFor.length > 0" class="mb-2 space-y-1" data-testid="blockers">
+          <li
+            v-for="blocker in waitsFor"
+            :key="blocker.id"
+            class="flex items-center gap-2 text-sm"
+            :data-testid="`blocker-${blocker.name}`"
+          >
+            <RouterLink :to="`/tasks/${blocker.id}`" class="hover:text-[var(--color-accent)]">
+              {{ blocker.name }}
+            </RouterLink>
+            <!-- The verdict, not the blocker's state: what matters here is
+                 whether this task can ever start, and "done" and "archived
+                 after finishing" are the same answer. -->
+            <span
+              class="font-mono text-[10px] tracking-wide"
+              :class="{
+                'text-[var(--color-ink-faint)]': blocker.status === 'met',
+                'text-[var(--color-warn)]': blocker.status === 'waiting',
+                'text-[var(--color-danger)]': blocker.status === 'dead',
+              }"
+              :data-testid="`blocker-${blocker.name}-status`"
+            >
+              {{
+                blocker.status === 'met'
+                  ? 'done'
+                  : blocker.status === 'waiting'
+                    ? 'not yet'
+                    : 'never will be'
+              }}
+            </span>
+            <button
+              type="button"
+              :disabled="blocking"
+              class="ml-auto text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-danger)] disabled:opacity-40"
+              :data-testid="`unblock-${blocker.name}`"
+              @click="independ(blocker.id)"
+            >
+              Remove
+            </button>
+          </li>
+        </ul>
+        <p v-else class="mb-2 text-sm text-[var(--color-ink-muted)]" data-testid="waits-for-nothing">
+          Nothing. It can start as soon as it is queued.
+        </p>
+
+        <div v-if="candidates.length > 0" class="flex items-center gap-2">
+          <select
+            v-model="addBlocker"
+            class="rounded-md border border-[var(--color-line)] bg-[var(--color-raised)] px-2 py-1.5 text-sm"
+            data-testid="blocker-choice"
+          >
+            <option value="">Choose a task…</option>
+            <option v-for="other in candidates" :key="other.id" :value="other.id">
+              {{ other.name }}
+            </option>
+          </select>
+          <button
+            type="button"
+            :disabled="addBlocker === '' || blocking"
+            class="rounded-md border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] disabled:opacity-40"
+            data-testid="add-blocker"
+            @click="dependOn()"
+          >
+            Wait for it
+          </button>
+        </div>
+
+        <p
+          v-if="dependencyError"
+          class="mt-2 text-xs text-[var(--color-danger)]"
+          data-testid="dependency-error"
+        >
+          {{ dependencyError }}
+        </p>
       </section>
 
       <p

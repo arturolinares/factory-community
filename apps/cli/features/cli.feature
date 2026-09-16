@@ -358,3 +358,109 @@ Feature: The factory command
       When I run "stop --all"
       Then it succeeds
       And the output says nothing was running
+
+  Rule: the terminal can order the work as well as watch it
+
+    Dependencies and the two whole-project buttons are the same two routes the
+    board uses. A terminal that could only watch would make the board the only
+    way to arrange work, which is the hole `accept` was added to close.
+
+    Ids are resolved from a prefix at both ends of a dependency, because the
+    listing prints eight characters and nobody types a uuid.
+
+    Scenario: One task can be made to wait for another
+      Given a daemon that accepts a dependency
+      When I run "task depends task-1 task-2"
+      Then it succeeds
+      And the output says it waits for "Scaffold"
+      And the daemon was asked to add the dependency
+
+    Scenario: The dependency can be taken back
+      Given a daemon that accepts a dependency
+      When I run "task depends task-1 task-2 --remove"
+      Then it succeeds
+      And the daemon was asked to remove the dependency
+
+    Scenario: Both ids are resolved from a prefix
+      Given a daemon with two tasks and a dependency to add
+      When I run "task depends task-100 task-200"
+      Then it succeeds
+      And the daemon was asked about the full ids
+
+    Scenario: A refusal is passed through in the daemon's own words
+      Given a daemon that refuses a dependency as a ring
+      When I run "task depends task-1 task-2"
+      Then it fails
+      And the output says it would make a ring
+
+    Scenario: Asking for a dependency without both ends says so
+      When I run "task depends task-1"
+      Then the exit code is 2
+      And the output mentions "waits-for-id"
+
+    Scenario: A task can be marked done from the terminal
+      Given a daemon that accepts an action
+      When I run "task done task-1"
+      Then it succeeds
+      # `done` to type, `mark_done` on the wire: the wire name says which of
+      # two ways of reaching done this is, and a person has only one.
+      And the daemon was asked to mark it done
+
+    Scenario: A whole project can be queued
+      Given a daemon with a project to queue
+      When I run "project queue work"
+      Then it succeeds
+      And the output lists the tasks it queued in order
+      And the output says what it skipped
+
+    Scenario: Queueing a project with nothing to queue says so
+      Given a daemon with a project and nothing to queue
+      When I run "project queue work"
+      Then it succeeds
+      And the output says there was nothing to queue
+
+    Scenario: A project is found by part of its name
+      Given a daemon with a project to queue
+      When I run "project queue wo"
+      Then it succeeds
+
+    Scenario: A name matching two projects is refused
+      Given a daemon with two projects whose names start alike
+      When I run "project queue we"
+      Then it fails
+      And the output names both projects
+
+    Scenario: An exact name wins over a longer one starting the same way
+      Given a daemon with two projects whose names start alike
+      When I run "project queue web"
+      # "web" is not ambiguous because "webhooks" exists. A prefix match that
+      # did not try the whole name first would make the shorter name unusable.
+      Then it succeeds
+      And it was "web" that was queued
+
+    Scenario: A project that is not there is refused
+      Given a daemon with a project to queue
+      When I run "project queue nowhere"
+      Then it fails
+      And the output says there is no such project
+
+    Scenario: A whole project can be stopped
+      Given a daemon with a project to stop
+      When I run "project stop work"
+      Then it succeeds
+      And the output says 2 tasks were cancelled
+
+    Scenario: Stopping a project where nothing runs says so
+      Given a daemon with a project and nothing running
+      When I run "project stop work"
+      Then it succeeds
+      And the output says nothing was running there
+
+    Scenario: A project command needs a name
+      When I run "project queue"
+      Then the exit code is 2
+
+    Scenario: An unknown project command says what there is
+      When I run "project nonsense work"
+      Then the exit code is 2
+      And the output mentions "queue"

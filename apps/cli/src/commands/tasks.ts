@@ -38,15 +38,25 @@ interface TaskSummary {
   flags: string[]
   blockedReason?: string
   updatedAt: string
+  dependsOn?: string[]
   actions?: { action: string; label: string }[]
   progress?: { completed: number; total: number }
+  blockers?: { id: string; name: string; status: string }[]
 }
 
 interface TaskDetail {
   task: TaskSummary
   actions: { action: string; label: string }[]
+  blockers?: { id: string; name: string; status: string }[]
   history: { at: string; action: string; from: string; to: string; detail?: string }[]
   runs: { id: string; workflow: string; state: string; attempt: number; startedAt: string }[]
+}
+
+/** How a blocker's verdict reads in a line of prose. */
+const WAIT_WORDS: Record<string, string> = {
+  met: 'done',
+  waiting: 'not yet',
+  dead: 'never will be',
 }
 
 /** A short id is enough to type, and enough to be unambiguous locally. */
@@ -142,6 +152,16 @@ export async function show(
       )
     }
     if (task.flags.length > 0) lines.push(`  flags     ${task.flags.join(', ')}`)
+    // The verdict rather than the blocker's state: what matters is whether this
+    // task can ever start, and "done" and "archived after finishing" are the
+    // same answer.
+    if (detail.blockers !== undefined && detail.blockers.length > 0) {
+      lines.push(
+        `  waits for ${detail.blockers
+          .map((blocker) => `${blocker.name} (${WAIT_WORDS[blocker.status] ?? blocker.status})`)
+          .join(', ')}`,
+      )
+    }
     if (task.blockedReason !== undefined) {
       lines.push(`  blocked   ${style.red(task.blockedReason)}`)
     }
@@ -328,4 +348,142 @@ const colourState = (state: string, style: Style): string => {
   if (state === 'awaiting_approval') return style.yellow(state)
   if (state === 'done') return style.green(state)
   return state
+}
+
+/**
+ * `factory task depends <id> <on>` — make one task wait for another.
+ *
+ * Both ids go through the same prefix resolution the other commands use, so
+ * the eight characters the listing printed are enough for either end.
+ *
+ * `--remove` rather than a second verb: the pair reads as one decision, and
+ * `factory task depends x y --remove` says which relation is being undone in
+ * the same words that made it.
+ */
+export async function depends(
+  client: DaemonClient,
+  id: string,
+  blockerId: string,
+  options: { remove?: boolean },
+  style: Style,
+): Promise<CommandResult> {
+  try {
+    const resolved = await resolveId(client, id)
+    const blocker = await resolveId(client, blockerId)
+    const path = `/api/tasks/${encodeURIComponent(resolved)}/dependencies`
+    const result =
+      options.remove === true
+        ? await client.request<{ task: TaskSummary; blockers: { name: string }[] }>(
+            `${path}/${encodeURIComponent(blocker)}`,
+            { method: 'DELETE' },
+          )
+        : await client.request<{ task: TaskSummary; blockers: { name: string }[] }>(path, {
+            method: 'POST',
+            body: { dependsOn: blocker },
+          })
+    const waiting = result.blockers.map((entry) => entry.name)
+    return ok(
+      [
+        waiting.length === 0
+          ? `${result.task.name} waits for nothing.`
+          : `${result.task.name} waits for ${waiting.join(', ')}.`,
+      ],
+      result,
+    )
+  } catch (error) {
+    if (error instanceof AmbiguousId) return failed([error.message, style.dim('Use more of it.')])
+    return asFailure(error)
+  }
+}
+
+/**
+ * `factory project queue|stop <name>` — a whole project at once.
+ *
+ * The same two routes the board's buttons use, so a terminal and a browser
+ * cannot differ about what "queue all" means. Named rather than by id: a
+ * project has one, it is what the rail shows, and nobody memorises the uuid of
+ * a repository.
+ */
+export async function projectQueue(
+  client: DaemonClient,
+  name: string,
+  style: Style,
+): Promise<CommandResult> {
+  try {
+    const project = await resolveProject(client, name)
+    const result = await client.request<{
+      queued: TaskSummary[]
+      skipped: { task: TaskSummary; reason: string }[]
+    }>(`/api/projects/${encodeURIComponent(project.id)}/queue`, { method: 'POST', body: {} })
+
+    const lines =
+      result.queued.length === 0
+        ? [`Nothing to queue in ${project.name}.`]
+        : [
+            `Queued ${result.queued.length} ${result.queued.length === 1 ? 'task' : 'tasks'} in ${project.name}:`,
+            // In the order they were queued, which is dependency order — the
+            // one fact about this command worth printing.
+            ...result.queued.map((task) => `  ${task.name}`),
+          ]
+    for (const entry of result.skipped) {
+      lines.push(style.dim(`  ${entry.task.name} — ${entry.reason}`))
+    }
+    return ok(lines, result)
+  } catch (error) {
+    if (error instanceof AmbiguousId) return failed([error.message, style.dim('Use more of it.')])
+    return asFailure(error)
+  }
+}
+
+export async function projectStop(
+  client: DaemonClient,
+  name: string,
+  style: Style,
+): Promise<CommandResult> {
+  try {
+    const project = await resolveProject(client, name)
+    const result = await client.request<{
+      cancelled: TaskSummary[]
+      signalled: number
+      killed: number
+    }>(`/api/projects/${encodeURIComponent(project.id)}/stop`, { method: 'POST', body: {} })
+
+    if (result.cancelled.length === 0) {
+      return ok([`Nothing was running in ${project.name}.`], result)
+    }
+    return ok(
+      [
+        `Cancelled ${result.cancelled.length} ${result.cancelled.length === 1 ? 'task' : 'tasks'} in ${project.name}.`,
+        style.dim(`  ${result.signalled} signalled, ${result.killed} killed`),
+      ],
+      result,
+    )
+  } catch (error) {
+    if (error instanceof AmbiguousId) return failed([error.message, style.dim('Use more of it.')])
+    return asFailure(error)
+  }
+}
+
+interface ProjectSummary {
+  id: string
+  name: string
+}
+
+/**
+ * A project by name, or by enough of one.
+ *
+ * Case-insensitive and exact first: a project called "web" must not be
+ * ambiguous because another is called "webhooks".
+ */
+async function resolveProject(client: DaemonClient, name: string): Promise<ProjectSummary> {
+  const known = await client.request<{ items: ProjectSummary[] }>('/api/projects')
+  const wanted = name.toLowerCase()
+  const exact = known.items.find((project) => project.name.toLowerCase() === wanted)
+  if (exact !== undefined) return exact
+  const matches = known.items.filter((project) => project.name.toLowerCase().startsWith(wanted))
+  if (matches.length === 1) return matches[0] as ProjectSummary
+  if (matches.length === 0) throw new AmbiguousId(`No project called "${name}".`)
+  throw new AmbiguousId(
+    `"${name}" matches ${matches.length} projects: ${matches.map((p) => p.name).join(', ')}.`,
+  )
 }

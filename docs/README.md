@@ -1,12 +1,13 @@
 # Factory's documentation
 
-Four things you might want, in the order most people want them.
+Five things you might want, in the order most people want them.
 
 | | |
 |---|---|
 | [`quickstart.md`](quickstart.md) | Build it, start it, run the built-in workflow. Fifteen minutes. |
 | [`workflows.md`](workflows.md) | Writing a workflow: phases, steps, agents, artifacts, approval gates. |
 | [`plugins.md`](plugins.md) | Adding a capability — a step kind, a provider, a button on a task, a doctor rule. |
+| [`task-dependencies.md`](task-dependencies.md) | One task waiting for another, marking one done by hand, and the two whole-project buttons. |
 | [`security/`](security/) | What an agent may reach, and what it may not. |
 
 ## Security

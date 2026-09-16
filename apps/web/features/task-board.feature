@@ -768,3 +768,183 @@ Feature: The task board
       # The rails give up their room at that scale; the nav narrows and stays,
       # which is why the marker lives there and not in a banner.
       Then the Full Access marker is visible
+
+  Rule: a project's work is queued and stopped from its own board
+
+    The board knew which project it was showing and never said so: the title
+    read "Tasks" whatever was chosen, and the only sign was a ring on a 40px
+    square. Buttons that act on every task in a project cannot be that quiet —
+    "Stop all" has to be able to say all of what.
+
+    So the header names the project, and the two buttons appear only when one is
+    chosen. Under "All" there is no graph to order and no project to stop.
+
+    Scenario: The header names the board you are looking at
+      Given the project "work" is registered
+      When I open the tasks page
+      And I choose the project "work"
+      Then the header says "Tasks · work"
+
+    Scenario: Under All there is nothing to queue or stop
+      Given the project "work" is registered
+      When I open the tasks page
+      Then Queue all is not offered
+      And Stop all is not offered
+
+    Scenario: Choosing a project offers both
+      Given the project "work" is registered
+      When I open the tasks page
+      And I choose the project "work"
+      Then Queue all is offered
+      And Stop all is offered
+
+    Scenario: Queue all starts the project's work
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      And the task "Two" exists in "work" on "hello"
+      When I open the tasks page
+      And I choose the project "work"
+      And I queue the whole project
+      Then "One" leaves "draft"
+      And "Two" leaves "draft"
+
+    Scenario: Queue all leaves another project's work alone
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      And the task "Loose" exists on "hello"
+      When I open the tasks page
+      And I choose the project "work"
+      And I queue the whole project
+      And I choose every project
+      # The buttons are project-level because the graph is.
+      Then "Loose" is still "draft"
+
+    Scenario: Stopping everything asks first
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      When I open the tasks page
+      And I choose the project "work"
+      And I press Stop all
+      # Killing an agent mid-sentence has no undo. The definition editor asks
+      # twice before deleting for the same reason.
+      Then it asks whether I really mean it
+
+    Scenario: Stop all cancels what is running, and nothing starts again
+      Given the project defines a workflow "slow" that does not finish
+      And the project "work" is registered
+      And the task "One" exists in "work" on "slow"
+      And the task "Two" exists in "work" on "slow"
+      When I open the tasks page
+      And I choose the project "work"
+      And I queue the whole project
+      And "One" is running
+      And I stop the whole project
+      Then "One" is "cancelled"
+      And "Two" is "cancelled"
+      # The clause worth watching: cancelling wakes the scheduler, so a stop
+      # that only killed processes would start the next task within a tick.
+      And nothing starts again
+
+  Rule: a task says what it waits for, and the task page is where you say it
+
+    A dependency decides when work starts, so it belongs beside the plan, which
+    decides what the work is.
+
+    The board draws what it is still waiting for and not what it already has:
+    a line listing finished blockers never goes away.
+
+    Scenario: A new task waits for nothing
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      When I open the tasks page
+      And I open "One"
+      Then the page says it waits for nothing
+
+    Scenario: A task can be made to wait for another
+      Given the project "work" is registered
+      And the task "Scaffold" exists in "work" on "hello"
+      And the task "The model" exists in "work" on "hello"
+      When I open the tasks page
+      And I open "The model"
+      And I make it wait for "Scaffold"
+      Then it waits for "Scaffold"
+      And "Scaffold" has not happened yet
+
+    Scenario: The board row says what it is waiting for
+      Given the project "work" is registered
+      And the task "Scaffold" exists in "work" on "hello"
+      And the task "The model" exists in "work" on "hello"
+      When I open the tasks page
+      And I open "The model"
+      And I make it wait for "Scaffold"
+      And I go back to the board
+      Then the row for "The model" says it is waiting for "Scaffold"
+
+    Scenario: A ring is refused where it was asked for
+      Given the project "work" is registered
+      And the task "Scaffold" exists in "work" on "hello"
+      And the task "The model" exists in "work" on "hello"
+      When I open the tasks page
+      And I open "The model"
+      And I make it wait for "Scaffold"
+      And I go back to the board
+      And I open "Scaffold"
+      And I make it wait for "The model"
+      # The daemon's sentence, which is the store's sentence. Rewording it in
+      # the browser would be a second explanation of one rule.
+      Then the refusal says it would make a ring
+
+    Scenario: The dependency can be taken back
+      Given the project "work" is registered
+      And the task "Scaffold" exists in "work" on "hello"
+      And the task "The model" exists in "work" on "hello"
+      When I open the tasks page
+      And I open "The model"
+      And I make it wait for "Scaffold"
+      And I stop it waiting for "Scaffold"
+      Then the page says it waits for nothing
+
+    Scenario: A task does not start while it is waiting
+      Given the project "work" is registered
+      And the task "Scaffold" exists in "work" with no workflow
+      And the task "The model" exists in "work" on "hello"
+      When I open the tasks page
+      And I choose the project "work"
+      And I open "The model"
+      And I make it wait for "Scaffold"
+      And I go back to the board
+      And I queue the whole project
+      # "Scaffold" has nothing to run, so Queue all leaves it a draft and
+      # nothing can satisfy the dependency until somebody says it is done.
+      Then "The model" is still "queued"
+
+    Scenario: Marking the blocker done by hand releases it
+      Given the project "work" is registered
+      And the task "Scaffold" exists in "work" with no workflow
+      And the task "The model" exists in "work" on "hello"
+      When I open the tasks page
+      And I choose the project "work"
+      And I open "The model"
+      And I make it wait for "Scaffold"
+      And I go back to the board
+      And I queue the whole project
+      And I open "Scaffold"
+      And I mark it done
+      # Work done outside Factory is still work done. Its dependents stop
+      # waiting the moment it is marked.
+      Then "The model" leaves "queued"
+      # And the row stops saying it: a line listing blockers that have already
+      # happened would never go away.
+      And the row for "The model" says nothing about waiting
+
+    Scenario: Another project's tasks are not on offer
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      And the task "Two" exists in "work" on "hello"
+      And the task "Loose" exists on "hello"
+      When I open the tasks page
+      And I open "One"
+      Then "Two" can be chosen to wait for
+      # A dependency between projects has no owner, and the store refuses one.
+      # Offering it would be offering a refusal.
+      And "Loose" cannot be chosen to wait for

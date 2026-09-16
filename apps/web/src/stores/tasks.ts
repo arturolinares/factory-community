@@ -31,6 +31,8 @@ export const useTasks = defineStore('tasks', () => {
   const loading = ref(false)
   const error = ref<string | undefined>(undefined)
   const acting = ref<string | undefined>(undefined)
+  /** A whole-project action in flight. Separate from `acting`, which is an id. */
+  const batching = ref(false)
 
   const filters = reactive({
     query: '',
@@ -105,6 +107,58 @@ export const useTasks = defineStore('tasks', () => {
       error.value = caught instanceof ApiError ? caught.message : String(caught)
     } finally {
       acting.value = undefined
+    }
+  }
+
+  /**
+   * Queue everything in the chosen project, in dependency order.
+   *
+   * One request, not one per task: this store holds one `error` and one
+   * `acting` id, so a loop here would have nowhere to put a partial refusal —
+   * and the disclaimer would be answered ten times over.
+   *
+   * Nothing happens with "All" chosen. The graph belongs to a project, and
+   * queueing every task in every repository from one button is not something
+   * anybody means.
+   */
+  async function queueProject(): Promise<void> {
+    const projectId = chosen.projectId
+    if (projectId === undefined) return
+    batching.value = true
+    error.value = undefined
+    try {
+      await api.queueProject(projectId)
+      await load()
+    } catch (caught) {
+      // The same answer a single queue gives, for the same reason: a refusal
+      // for want of an acceptance is the panel, not a red line.
+      if (
+        useSettings().handledRefusal(caught, async () => {
+          await api.queueProject(projectId)
+          await load()
+        })
+      ) {
+        return
+      }
+      error.value = caught instanceof ApiError ? caught.message : String(caught)
+    } finally {
+      batching.value = false
+    }
+  }
+
+  /** Stop everything in flight in the chosen project. Never gated. */
+  async function stopProject(): Promise<void> {
+    const projectId = chosen.projectId
+    if (projectId === undefined) return
+    batching.value = true
+    error.value = undefined
+    try {
+      await api.stopProject(projectId)
+      await load()
+    } catch (caught) {
+      error.value = caught instanceof ApiError ? caught.message : String(caught)
+    } finally {
+      batching.value = false
     }
   }
 
@@ -208,6 +262,7 @@ export const useTasks = defineStore('tasks', () => {
     loading,
     error,
     acting,
+    batching,
     filters,
     view,
     inProject,
@@ -221,5 +276,7 @@ export const useTasks = defineStore('tasks', () => {
     act,
     assign,
     create,
+    queueProject,
+    stopProject,
   }
 })

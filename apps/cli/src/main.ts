@@ -38,7 +38,11 @@ Usage
   factory task show <id>                  one task, its runs and what it can do
   factory task new <name>                 create one   (--workflow, repeatable)
   factory task logs <id>                  the newest run, step by step
-  factory task <action> <id>              queue, approve, reject, retry, cancel…
+  factory task <action> <id>              queue, approve, reject, retry, cancel, done
+  factory task depends <id> <on>          make one wait for another  (--remove)
+
+  factory project queue <name>            queue the lot, in dependency order
+  factory project stop <name>             cancel whatever is in flight there
 
   factory setup                           what is still missing, and how to fix it
   factory doctor                          check the installation
@@ -96,7 +100,13 @@ const TASK_ACTIONS = [
   'cancel',
   'archive',
   'restore',
+  // Spelled `done` here and `mark_done` on the wire. The wire name says which
+  // of two ways of reaching `done` this is; a person typing it has only one.
+  'done',
 ] as const satisfies readonly string[]
+
+/** Where a CLI verb and the action it performs are spelled differently. */
+const ACTION_NAMES: Record<string, string> = { done: 'mark_done' }
 
 export interface RunOptions {
   readonly argv: readonly string[]
@@ -290,14 +300,36 @@ async function dispatch(
           style,
         )
       }
+      if (action === 'depends') {
+        const [id, blocker] = args.filter((arg) => !arg.startsWith('--'))
+        if (id === undefined || blocker === undefined) {
+          return usage('Which two? Try "factory task depends <id> <waits-for-id>".')
+        }
+        return tasks.depends(client, id, blocker, { remove: has(rest, '--remove') }, style)
+      }
       if (action !== undefined && (TASK_ACTIONS as readonly string[]).includes(action)) {
         const id = args[0]
         if (id === undefined) return usage(`Which task? Try "factory task ${action} <id>".`)
-        return tasks.act(client, action, id, style)
+        return tasks.act(client, ACTION_NAMES[action] ?? action, id, style)
       }
       return usage(
-        'Unknown task command. Try "list", "show", "new", "logs", or an action like "queue".',
+        'Unknown task command. Try "list", "show", "new", "logs", "depends", or an action like "queue".',
       )
+    }
+
+    case 'project': {
+      const client = daemon ?? createDaemonClient(context.env)
+      const [action, ...args] = rest
+      const name = args.find((arg) => !arg.startsWith('--'))
+      if (action === 'queue' || action === 'stop') {
+        if (name === undefined) {
+          return usage(`Which project? Try "factory project ${action} <name>".`)
+        }
+        return action === 'queue'
+          ? tasks.projectQueue(client, name, style)
+          : tasks.projectStop(client, name, style)
+      }
+      return usage('Unknown project command. Try "queue" or "stop".')
     }
 
     case 'run': {

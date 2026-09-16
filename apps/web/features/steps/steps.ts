@@ -1680,3 +1680,141 @@ Then('{string} is still {string}', async ({ page }, name: string, state: string)
     page.getByTestId(`task-row-${name}`).getByTestId(`state-${state}`),
   ).toBeVisible()
 })
+
+/* ------------------------------------------------- dependencies and batches */
+
+const SLOW_WORKFLOW = 'name: slow\nphases: [wait]\n'
+const SLOW_PHASE = 'name: wait\nsteps: [{run: sleep 30}]\n'
+
+/**
+ * A workflow that is still going when the scenario looks at it.
+ *
+ * "hello" finishes in a few hundred milliseconds, so a scenario about stopping
+ * work would be racing it: by the time the button was pressed the task could
+ * already be done, and the assertion would pass or fail according to the
+ * machine.
+ */
+Given('the project defines a workflow {string} that does not finish', async ({ world }, name: string) => {
+  world.workflow(world.projectScope, name, SLOW_WORKFLOW.replace('slow', name))
+  world.phase(world.projectScope, 'wait', SLOW_PHASE)
+  world.withShell = true
+})
+
+Given(
+  'the task {string} exists in {string} with no workflow',
+  async ({ world }, name: string, project: string) => {
+    await world.startDaemon()
+    await world.createTask(name, [], world.projectIds.get(project))
+  },
+)
+
+Then('the header says {string}', async ({ page }, text: string) => {
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(text)
+})
+
+Then('Queue all is offered', async ({ page }) => {
+  await expect(page.getByTestId('queue-all')).toBeVisible()
+})
+
+Then('Queue all is not offered', async ({ page }) => {
+  await expect(page.getByTestId('queue-all')).toHaveCount(0)
+})
+
+Then('Stop all is offered', async ({ page }) => {
+  await expect(page.getByTestId('stop-all')).toBeVisible()
+})
+
+Then('Stop all is not offered', async ({ page }) => {
+  await expect(page.getByTestId('stop-all')).toHaveCount(0)
+})
+
+When('I queue the whole project', async ({ page }) => {
+  await page.getByTestId('queue-all').click()
+})
+
+When('I press Stop all', async ({ page }) => {
+  await page.getByTestId('stop-all').click()
+})
+
+Then('it asks whether I really mean it', async ({ page }) => {
+  await expect(page.getByTestId('stop-all-confirm')).toBeVisible()
+})
+
+When('I stop the whole project', async ({ page }) => {
+  await page.getByTestId('stop-all').click()
+  await page.getByTestId('stop-all-confirm').click()
+})
+
+When('{string} is running', async ({ page }, name: string) => {
+  await expect(
+    page.getByTestId(`task-row-${name}`).getByTestId('state-running'),
+  ).toBeVisible({ timeout: 15_000 })
+})
+
+/**
+ * Nothing came back up.
+ *
+ * Cancelling wakes the scheduler, so this is the clause that would catch a
+ * stop that killed processes and left the queue alone. A wait rather than an
+ * assertion on the spot: the failure it is looking for takes a tick to appear.
+ */
+Then('nothing starts again', async ({ page }) => {
+  await page.waitForTimeout(1500)
+  await expect(page.getByTestId('summary-running')).toContainText('0')
+})
+
+Then('the page says it waits for nothing', async ({ page }) => {
+  await expect(page.getByTestId('waits-for-nothing')).toBeVisible()
+})
+
+When('I make it wait for {string}', async ({ page }, name: string) => {
+  await page.getByTestId('blocker-choice').selectOption({ label: name })
+  await page.getByTestId('add-blocker').click()
+})
+
+Then('it waits for {string}', async ({ page }, name: string) => {
+  await expect(page.getByTestId(`blocker-${name}`)).toBeVisible()
+})
+
+Then('{string} has not happened yet', async ({ page }, name: string) => {
+  await expect(page.getByTestId(`blocker-${name}-status`)).toHaveText('not yet')
+})
+
+Then(
+  'the row for {string} says it is waiting for {string}',
+  async ({ page }, name: string, blocker: string) => {
+    await expect(page.getByTestId(`waiting-${name}`)).toContainText(`waiting for ${blocker}`)
+  },
+)
+
+Then('the refusal says it would make a ring', async ({ page }) => {
+  await expect(page.getByTestId('dependency-error')).toContainText('ring')
+})
+
+When('I stop it waiting for {string}', async ({ page }, name: string) => {
+  await page.getByTestId(`unblock-${name}`).click()
+})
+
+When('I mark it done', async ({ page }) => {
+  await page.getByTestId('action-mark_done').click()
+})
+
+Then('the row for {string} says nothing about waiting', async ({ page }, name: string) => {
+  await expect(page.getByTestId(`waiting-${name}`)).toHaveCount(0)
+})
+
+Then('{string} can be chosen to wait for', async ({ page }, name: string) => {
+  await expect(page.locator('[data-testid="blocker-choice"] option', { hasText: name })).toHaveCount(
+    1,
+  )
+})
+
+Then('{string} cannot be chosen to wait for', async ({ page }, name: string) => {
+  // The picker has to be there for this to mean anything: with nothing to
+  // offer it is not rendered at all, and an absent control would pass for the
+  // wrong reason.
+  await expect(page.getByTestId('blocker-choice')).toBeVisible()
+  await expect(page.locator('[data-testid="blocker-choice"] option', { hasText: name })).toHaveCount(
+    0,
+  )
+})

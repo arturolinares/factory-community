@@ -805,6 +805,26 @@ export const api = {
     }),
 
   /**
+   * Queue every task in a project that can be queued, in dependency order.
+   *
+   * One request rather than one per task. `skipped` says which were left and
+   * why — a draft with nothing ticked has nothing to run — and a 409 either
+   * carries the disclaimer or names a ring.
+   */
+  queueProject: (id: string) =>
+    request<{
+      queued: Task[]
+      skipped: { task: Task; reason: string }[]
+    }>(`/api/projects/${encodeURIComponent(id)}/queue`, { method: 'POST' }),
+
+  /** Cancel everything in flight or in line in a project, and kill its processes. */
+  stopProject: (id: string) =>
+    request<{ cancelled: Task[]; signalled: number; killed: number }>(
+      `/api/projects/${encodeURIComponent(id)}/stop`,
+      { method: 'POST' },
+    ),
+
+  /**
    * Make a task wait for another, or stop it waiting.
    *
    * One edge at a time rather than sending the whole list: a picker adds and
