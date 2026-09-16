@@ -69,3 +69,33 @@ Feature: Doctor answers for the installation itself
       When doctor runs
       Then it warns that it is switched off
       And nothing calls it unknown
+
+  Rule: doctor says how much a provider's own CLI is confining it
+
+    The Default profile is layered: Factory's workspace boundary and filtered
+    environment, plus whatever the provider's CLI enforces for itself. The
+    second half varies by provider and is the half a user cannot see, so doctor
+    reads it off the descriptor and says it.
+
+    Neither case is an error. A provider that predates profiles still runs, and
+    one that claims nothing still runs — the point is that "confined" never
+    means more than it can deliver.
+
+    Scenario: A provider using one list for both profiles is reported
+      Given a provider whose permission arguments are one list
+      When doctor runs
+      Then it warns that the provider cannot tell the profiles apart
+      And it says how to give it a per-profile list
+      And it is a warning, not an error
+
+    Scenario: A provider that passes nothing under Default is reported
+      Given a provider that passes no arguments under Default
+      When doctor runs
+      Then it warns that the CLI adds no confinement of its own
+      And it says Factory's own boundary still applies
+      And it is a warning, not an error
+
+    Scenario: A provider that distinguishes the profiles is not reported
+      Given a provider with different arguments per profile
+      When doctor runs
+      Then nothing is said about profiles

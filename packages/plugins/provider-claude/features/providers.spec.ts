@@ -10,7 +10,9 @@ import {
   PROVIDER_KIND,
   checkAgentStep,
   checkPluginConformance,
+  permissionArgsFor,
   type AgentStep,
+  type ExecutionProfile,
   type ProviderCapability,
   type RenderedCommand,
 } from '@factory/core'
@@ -29,6 +31,7 @@ describeFeature(feature, ({ Background, Rule, Scenario, ScenarioOutline, BeforeE
   let rendered: RenderedCommand
   let problems: Problem[] = []
   let conformed = false
+  let allowed: string[] = []
 
   const provider = (id: string): ProviderCapability =>
     host.get<ProviderCapability>(PROVIDER_KIND, id) as ProviderCapability
@@ -38,6 +41,7 @@ describeFeature(feature, ({ Background, Rule, Scenario, ScenarioOutline, BeforeE
 
   BeforeEachScenario(() => {
     step = { uses: 'agent', prompt: '' }
+    allowed = []
     problems = []
     conformed = false
   })
@@ -87,8 +91,7 @@ describeFeature(feature, ({ Background, Rule, Scenario, ScenarioOutline, BeforeE
       rendered = provider('claude').render(step)
     })
     Then('the command is "claude"', () => expect(rendered.command).toBe('claude'))
-    And('the arguments include "--permission-mode bypassPermissions"', () =>
-      expect(argv()).toContain('--permission-mode bypassPermissions'),
+    And('the arguments include "--restricted"', () => expect(argv()).toContain('--restricted'),
     )
     And('the arguments include "--model opus"', () => expect(argv()).toContain('--model opus'))
     And('the arguments include "--effort max"', () => expect(argv()).toContain('--effort max'))
@@ -336,6 +339,124 @@ describeFeature(feature, ({ Background, Rule, Scenario, ScenarioOutline, BeforeE
       When('it is rendered for "claude"', renderFor('claude'))
       Then('the arguments do not include "--session-id"', excludes('--session-id'))
       And('it reports no session', () => expect(rendered.session).toBeUndefined())
+    })
+  })
+
+  Rule('the profile decides what the CLI is allowed to do', ({ RuleScenario }) => {
+    const withPrompt = (prompt: string) => (): void => {
+      step = { uses: 'agent', prompt }
+    }
+    const allowing = (directory: string) => (): void => {
+      allowed = [directory]
+    }
+    const renderAs = (id: string, profile: ExecutionProfile) => (): void => {
+      rendered = provider(id).render({
+        prompt: step.prompt,
+        profile,
+        ...(allowed.length === 0 ? {} : { allowedDirectories: allowed }),
+      })
+    }
+    const includes = (fragment: string) => (): void => {
+      expect(argv()).toContain(fragment)
+    }
+    const excludes = (fragment: string) => (): void => {
+      expect(argv()).not.toContain(fragment)
+    }
+
+    RuleScenario('The Default profile confines the agent and never waits', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('an agent step with the prompt "Analyse WW2-1234"', withPrompt('Analyse WW2-1234'))
+      When('it is rendered for "claude" under "default"', renderAs('claude', 'default'))
+      Then('the arguments include "--restricted"', includes('--restricted'))
+      And('the arguments name the tools the agent needs', () => {
+        // Named because `--restricted` removes the code-running tools unless
+        // `--tools` does — measured, after `--tools default` did not.
+        expect(argv()).toContain('--tools')
+        for (const tool of ['Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep']) {
+          expect(argv()).toContain(tool)
+        }
+      })
+      And('the arguments include "--permission-prompts none"', includes('--permission-prompts none'))
+      And('the arguments do not include "bypassPermissions"', excludes('bypassPermissions'))
+    })
+
+    RuleScenario('The Full Access profile removes the restriction', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('an agent step with the prompt "Analyse WW2-1234"', withPrompt('Analyse WW2-1234'))
+      When('it is rendered for "claude" under "full-access"', renderAs('claude', 'full-access'))
+      Then(
+        'the arguments include "--permission-mode bypassPermissions"',
+        includes('--permission-mode bypassPermissions'),
+      )
+      And('the arguments do not include "--restricted"', excludes('--restricted'))
+    })
+
+    RuleScenario('A confined agent is given the directories it legitimately needs', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('an agent step with the prompt "Analyse WW2-1234"', withPrompt('Analyse WW2-1234'))
+      And(
+        'the artifacts directory "/repos/todolist/.xaedalon/.factory/tasks/t/artifacts" is allowed',
+        allowing('/repos/todolist/.xaedalon/.factory/tasks/t/artifacts'),
+      )
+      When('it is rendered for "claude" under "default"', renderAs('claude', 'default'))
+      Then(
+        'the arguments include "--add-dir /repos/todolist/.xaedalon/.factory/tasks/t/artifacts"',
+        includes('--add-dir /repos/todolist/.xaedalon/.factory/tasks/t/artifacts'),
+      )
+    })
+
+    RuleScenario('An unconfined agent is given no directory grants', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('an agent step with the prompt "Analyse WW2-1234"', withPrompt('Analyse WW2-1234'))
+      And(
+        'the artifacts directory "/repos/todolist/.xaedalon/.factory/tasks/t/artifacts" is allowed',
+        allowing('/repos/todolist/.xaedalon/.factory/tasks/t/artifacts'),
+      )
+      When('it is rendered for "claude" under "full-access"', renderAs('claude', 'full-access'))
+      Then('the arguments do not include "--add-dir"', excludes('--add-dir'))
+    })
+
+    RuleScenario('Copilot keeps its own path and network checking under Default', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('an agent step with the prompt "Analyse WW2-1234"', withPrompt('Analyse WW2-1234'))
+      When('it is rendered for "copilot" under "default"', renderAs('copilot', 'default'))
+      Then('the arguments include "--allow-all-tools"', includes('--allow-all-tools'))
+      And('the arguments do not include "--allow-all-paths"', excludes('--allow-all-paths'))
+      And('the arguments do not include "--allow-all-urls"', excludes('--allow-all-urls'))
+    })
+
+    RuleScenario('Copilot under Full Access allows everything', ({ Given, When, Then }) => {
+      Given('an agent step with the prompt "Analyse WW2-1234"', withPrompt('Analyse WW2-1234'))
+      When('it is rendered for "copilot" under "full-access"', renderAs('copilot', 'full-access'))
+      Then('the arguments include "--allow-all"', includes('--allow-all'))
+    })
+
+    RuleScenario('Codex claims nothing under either profile', ({ Given, When, Then }) => {
+      Given('an agent step with the prompt "Analyse WW2-1234"', withPrompt('Analyse WW2-1234'))
+      When('it is rendered for "codex" under "default"', renderAs('codex', 'default'))
+      Then('no permission arguments are rendered', () => {
+        expect(permissionArgsFor(provider('codex').descriptor, 'default')).toEqual([])
+      })
     })
   })
 })

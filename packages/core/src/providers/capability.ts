@@ -1,8 +1,10 @@
 import { commandAvailability, type Availability } from './discover.js'
 import type { Capability } from '../capabilities.js'
 import type { Problem } from '../problems.js'
-import { MODEL_ROLES, type AgentStep, type SessionScope } from '../builtins/steps.js'
-import type { ProviderDescriptor, ProviderFeature } from './descriptor.js'
+import type { AgentStep, SessionScope } from '../builtins/steps.js'
+import { MODEL_ROLES } from '../model-roles.js'
+import { permissionArgsFor, type ProviderDescriptor, type ProviderFeature } from './descriptor.js'
+import { DEFAULT_PROFILE, isConfined, type ExecutionProfile } from '../security/profile.js'
 
 export const PROVIDER_KIND = 'provider'
 
@@ -62,6 +64,26 @@ export interface RenderRequest {
    */
   readonly resumeSession?: boolean
   readonly args?: readonly string[]
+  /**
+   * How much authority this invocation gets. Defaults to `default`.
+   *
+   * Selects which `permissionArgs` the descriptor contributes, and nothing
+   * else. A provider never learns why the profile is what it is.
+   */
+  readonly profile?: ExecutionProfile
+  /**
+   * Directories outside the working directory this agent legitimately needs.
+   *
+   * In practice: the task's artifacts root, which lives under the *project*
+   * rather than the worktree by design. A confined agent told to write there is
+   * being told to write outside its own working directory, so unless the CLI is
+   * given the directory explicitly, the Default profile refuses every artifact
+   * a worktree project ever promised.
+   *
+   * Emitted with the descriptor's `directoryFlag`, and only under a confined
+   * profile — under Full Access there is nothing to grant.
+   */
+  readonly allowedDirectories?: readonly string[]
 }
 
 export interface ProviderCapability extends Capability {
@@ -128,7 +150,16 @@ export function resolveModel(
 }
 
 export function render(descriptor: ProviderDescriptor, request: RenderRequest): RenderedCommand {
-  const args: string[] = [...descriptor.permissionArgs, ...descriptor.extraArgs]
+  const profile = request.profile ?? DEFAULT_PROFILE
+  const args: string[] = [...permissionArgsFor(descriptor, profile), ...descriptor.extraArgs]
+
+  // Before the model and the prompt, so the grant is adjacent to the rest of
+  // the authority this argv carries and reads as one decision.
+  if (isConfined(profile) && descriptor.directoryFlag !== undefined) {
+    for (const directory of request.allowedDirectories ?? []) {
+      args.push(descriptor.directoryFlag, directory)
+    }
+  }
 
   const model = resolveModel(descriptor, request.model)
   if (model !== undefined && descriptor.modelFlag !== undefined) {

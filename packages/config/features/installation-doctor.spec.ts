@@ -3,7 +3,13 @@ import { expect } from 'vitest'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { CapabilityHost, type Problem } from '@factory/core'
+import {
+  CapabilityHost,
+  PROVIDER_KIND,
+  providerFromDescriptor,
+  parseProviderDescriptor,
+  type Problem,
+} from '@factory/core'
 import { Sandbox } from './support.js'
 import { resolveScopes, type ScopeChain } from '../src/scopes.js'
 import { builtinDoctorPlugin, doctorContext, runDoctor } from '../src/doctor.js'
@@ -180,6 +186,87 @@ describeFeature(feature, ({ Background, Rule }) => {
       And('nothing calls it unknown', () =>
         expect(about('doctor.unknownDisabledPlugin')).toEqual([]),
       )
+    })
+  })
+
+  Rule("doctor says how much a provider's own CLI is confining it", ({ RuleScenario }) => {
+    /** A provider registered from a descriptor the scenario describes. */
+    const providing = (permissionArgs: unknown) => async (): Promise<void> => {
+      const parsed = parseProviderDescriptor({
+        kind: 'factory.provider/v1',
+        id: 'probe',
+        displayName: 'Probe',
+        command: 'probe',
+        models: { strong: 'big', balanced: 'mid', fast: 'small' },
+        permissionArgs,
+      })
+      expect(parsed.error, JSON.stringify(parsed.error?.issues)).toBeUndefined()
+      const descriptor = parsed.descriptor as NonNullable<typeof parsed.descriptor>
+      await host.load({
+        name: '@probe/provider',
+        version: '0.0.0',
+        register: (context) => {
+          context.provide(PROVIDER_KIND, providerFromDescriptor(descriptor))
+        },
+      })
+    }
+    const warnsOnly = (rule: string) => (): void => {
+      const found = about(rule)
+      expect(found).toHaveLength(1)
+      expect(found[0]?.severity).toBe('warning')
+    }
+
+    RuleScenario('A provider using one list for both profiles is reported', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('a provider whose permission arguments are one list', providing(['--yolo']))
+      When('doctor runs', run)
+      Then('it warns that the provider cannot tell the profiles apart', () =>
+        expect(anySays('same permission arguments for every execution profile')).toBe(true),
+      )
+      And('it says how to give it a per-profile list', () =>
+        expect(anySays('"default" and a "full-access"')).toBe(true),
+      )
+      And('it is a warning, not an error', warnsOnly('doctor.providerProfileUnaware'))
+    })
+
+    RuleScenario('A provider that passes nothing under Default is reported', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given(
+        'a provider that passes no arguments under Default',
+        providing({ default: [], 'full-access': ['--yolo'] }),
+      )
+      When('doctor runs', run)
+      Then('it warns that the CLI adds no confinement of its own', () =>
+        expect(anySays('adds no confinement of its own')).toBe(true),
+      )
+      And("it says Factory's own boundary still applies", () =>
+        expect(anySays('workspace boundary and environment filtering still apply')).toBe(true),
+      )
+      And('it is a warning, not an error', warnsOnly('doctor.providerUnconfined'))
+    })
+
+    RuleScenario('A provider that distinguishes the profiles is not reported', ({
+      Given,
+      When,
+      Then,
+    }) => {
+      Given(
+        'a provider with different arguments per profile',
+        providing({ default: ['--safe'], 'full-access': ['--yolo'] }),
+      )
+      When('doctor runs', run)
+      Then('nothing is said about profiles', () => {
+        expect(about('doctor.providerProfileUnaware')).toEqual([])
+        expect(about('doctor.providerUnconfined')).toEqual([])
+      })
     })
   })
 })

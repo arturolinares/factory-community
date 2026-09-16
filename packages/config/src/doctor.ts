@@ -6,7 +6,9 @@ import type {
   ProviderCapability,
 } from '@factory/core'
 import {
+  distinguishesProfiles,
   knownToolDirectories,
+  permissionArgsFor,
   PROVIDER_KIND,
   STEP_KIND,
   parseAgentFile,
@@ -259,6 +261,35 @@ const providerAvailability: DoctorRuleCapability = {
               `Provider "${provider.id}" has an unverified descriptor. ` +
               (provider.descriptor.provisionalNote ?? 'Check its flags before relying on it.'),
             rule: 'doctor.providerProvisional',
+          })
+        }
+        // Degrade by absence, with the absence said out loud. A descriptor
+        // written before profiles existed still renders — its one list of
+        // arguments is used whichever profile is active — so nothing breaks.
+        // But its Default profile is then only as confined as Factory's own
+        // boundary and environment filtering make it, with nothing from the CLI
+        // itself, and that is worth being told rather than assumed.
+        if (!distinguishesProfiles(provider.descriptor)) {
+          problems.push({
+            severity: 'warning',
+            message:
+              `Provider "${provider.id}" uses the same permission arguments for every ` +
+              `execution profile, so the Default profile does not confine it any further ` +
+              `than Factory does. Give its permissionArgs a "default" and a "full-access" ` +
+              `list to change that.`,
+            rule: 'doctor.providerProfileUnaware',
+          })
+        }
+        // An empty Default list is a provider that claims nothing at all —
+        // different from the case above, where it claims the same thing twice.
+        else if (permissionArgsFor(provider.descriptor, 'default').length === 0) {
+          problems.push({
+            severity: 'warning',
+            message:
+              `Provider "${provider.id}" passes no arguments under the Default profile, so ` +
+              `the CLI adds no confinement of its own. Factory's workspace boundary and ` +
+              `environment filtering still apply.`,
+            rule: 'doctor.providerUnconfined',
           })
         }
         return problems

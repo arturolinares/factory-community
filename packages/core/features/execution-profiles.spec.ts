@@ -1,6 +1,7 @@
 import { describeFeature, loadFeature } from '@amiceli/vitest-cucumber'
 import { expect } from 'vitest'
 import { fileURLToPath } from 'node:url'
+import { parseProviderDescriptor, distinguishesProfiles, permissionArgsFor } from '../src/providers/descriptor.js'
 import {
   EXECUTION_PROFILE_LABELS,
   EXECUTION_PROFILES,
@@ -155,6 +156,91 @@ describeFeature(feature, ({ Scenario, Rule, BeforeEachScenario }) => {
       And('"full-access" is called "Full Access"', () => {
         expect(labels[EXECUTION_PROFILES.indexOf('full-access')]).toBe('Full Access')
         expect(labels.every((label) => typeof label === 'string' && label.length > 0)).toBe(true)
+      })
+    })
+  })
+
+  Rule('a descriptor written before profiles existed still works', ({ RuleScenario }) => {
+    /** The smallest descriptor that parses, plus whatever the scenario is about. */
+    const descriptorWith = (permissionArgs: unknown) => {
+      const parsed = parseProviderDescriptor({
+        kind: 'factory.provider/v1',
+        id: 'probe',
+        displayName: 'Probe',
+        command: 'probe',
+        models: { strong: 'big', balanced: 'mid', fast: 'small' },
+        permissionArgs,
+      })
+      expect(parsed.error, JSON.stringify(parsed.error?.issues)).toBeUndefined()
+      return parsed.descriptor as NonNullable<typeof parsed.descriptor>
+    }
+    let descriptor: ReturnType<typeof descriptorWith>
+    let answers: readonly string[][]
+
+    const oneList = (): void => {
+      descriptor = descriptorWith(['--yolo'])
+    }
+    const perProfile = (): void => {
+      descriptor = descriptorWith({ default: ['--safe'], 'full-access': ['--yolo'] })
+    }
+    const onlyFullAccess = (): void => {
+      descriptor = descriptorWith({ 'full-access': ['--yolo'] })
+    }
+    const askBoth = (): void => {
+      answers = [
+        [...permissionArgsFor(descriptor, 'default')],
+        [...permissionArgsFor(descriptor, 'full-access')],
+      ]
+    }
+
+    RuleScenario('A bare list is used under both profiles', ({ Given, When, Then }) => {
+      Given('a descriptor whose permission arguments are one list', oneList)
+      When('I ask for its arguments under "default" and under "full-access"', askBoth)
+      Then('both answers are that list', () => {
+        expect(answers).toEqual([['--yolo'], ['--yolo']])
+      })
+    })
+
+    RuleScenario('A bare list is reported as not telling the profiles apart', ({
+      Given,
+      Then,
+    }) => {
+      Given('a descriptor whose permission arguments are one list', oneList)
+      Then('it does not distinguish the profiles', () => {
+        expect(distinguishesProfiles(descriptor)).toBe(false)
+      })
+    })
+
+    RuleScenario('A profile map answers each profile separately', ({ Given, When, Then }) => {
+      Given('a descriptor with different arguments per profile', perProfile)
+      When('I ask for its arguments under "default" and under "full-access"', askBoth)
+      Then("each answer is that profile's own list", () => {
+        expect(answers).toEqual([['--safe'], ['--yolo']])
+      })
+    })
+
+    RuleScenario('A profile map is reported as telling them apart', ({ Given, Then }) => {
+      Given('a descriptor with different arguments per profile', perProfile)
+      Then('it distinguishes the profiles', () => {
+        expect(distinguishesProfiles(descriptor)).toBe(true)
+      })
+    })
+
+    RuleScenario('A profile map that names one profile is completed with an empty list', ({
+      Given,
+      Then,
+      And,
+    }) => {
+      Given('a descriptor that names only "full-access"', onlyFullAccess)
+      Then('its "default" list is empty', () => {
+        // Off the parsed descriptor, not through the lookup: the schema is what
+        // makes this true, so the schema is what the scenario has to watch.
+        const declared = descriptor.permissionArgs as Record<string, readonly string[]>
+        expect(declared['default']).toEqual([])
+      })
+      And('its "full-access" list is what it named', () => {
+        const declared = descriptor.permissionArgs as Record<string, readonly string[]>
+        expect(declared['full-access']).toEqual(['--yolo'])
       })
     })
   })

@@ -85,3 +85,41 @@ Feature: How much authority an agent gets
       When I ask what to call each profile
       Then "default" is called "Default"
       And "full-access" is called "Full Access"
+
+  Rule: a descriptor written before profiles existed still works
+
+    `permissionArgs` used to be one list. Every descriptor in the wild is that
+    shape, including a third party's, and breaking them to introduce a profile
+    would make the profile the reason nobody upgrades.
+
+    So a bare list is read as "the same arguments whatever the profile". It is
+    not silently accepted: a provider that cannot tell the profiles apart has a
+    Default profile only as confined as Factory's own boundary makes it, and
+    doctor says so.
+
+    Scenario: A bare list is used under both profiles
+      Given a descriptor whose permission arguments are one list
+      When I ask for its arguments under "default" and under "full-access"
+      Then both answers are that list
+
+    Scenario: A bare list is reported as not telling the profiles apart
+      Given a descriptor whose permission arguments are one list
+      Then it does not distinguish the profiles
+
+    Scenario: A profile map answers each profile separately
+      Given a descriptor with different arguments per profile
+      When I ask for its arguments under "default" and under "full-access"
+      Then each answer is that profile's own list
+
+    Scenario: A profile map is reported as telling them apart
+      Given a descriptor with different arguments per profile
+      Then it distinguishes the profiles
+
+    Scenario: A profile map that names one profile is completed with an empty list
+      Given a descriptor that names only "full-access"
+      # The schema fills the missing profile in, which is what makes a fallback
+      # in the lookup unnecessary — and a fallback is worth not having, because
+      # the obvious one is "use the other profile's list", and for `default`
+      # that would quietly mean Full Access.
+      Then its "default" list is empty
+      And its "full-access" list is what it named

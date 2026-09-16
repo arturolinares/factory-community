@@ -44,7 +44,25 @@ session:
 
 # --allow-all-tools is required for non-interactive use, and --no-ask-user stops
 # the agent blocking forever on a question nobody is there to answer.
-permissionArgs: ['--allow-all-tools', '--allow-all-paths', '--allow-all-urls']
+#
+# The Default profile is the old list minus two flags, which is why it is a
+# smaller claim than Claude's and a safer change: `--allow-all-paths` is
+# documented as "Disable file path verification and allow access to any path",
+# and `--allow-all-urls` does the same for the network. Passing them meant
+# Factory switched off the confinement this CLI already had. Not passing them
+# leaves it on.
+#
+# Not probed against the real CLI — that needs a GitHub login and spends the
+# user's Copilot quota — but there is nothing ambiguous to probe: these are
+# flags being *withheld*, and `--allow-all-tools` is unchanged and known to
+# work. docs/security/providers.md says exactly this.
+permissionArgs:
+  default: ['--allow-all-tools']
+  full-access: ['--allow-all']
+
+# Documented as "Allow file access to a directory"; Factory uses it for the
+# artifacts root, which lives outside the worktree by design.
+directoryFlag: '--add-dir'
 extraArgs: ['--no-color', '--no-ask-user', '--log-level', 'none']
 
 stdin: /dev/null

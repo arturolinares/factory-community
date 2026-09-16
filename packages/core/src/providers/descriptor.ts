@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { closedWithExtensions, slug } from '../schema/common.js'
-import { MODEL_ROLES } from '../builtins/steps.js'
+import type { ExecutionProfile } from '../security/profile.js'
+import { MODEL_ROLES } from '../model-roles.js'
 
 /**
  * A provider is a descriptor, not a class.
@@ -98,8 +99,52 @@ const descriptorShape = {
     })
     .default({ mode: 'none', continueArgs: [] }),
 
-  /** Whatever the CLI needs to run unattended. */
-  permissionArgs: z.array(z.string()).default([]),
+  /**
+   * Whatever the CLI needs to run unattended, per execution profile.
+   *
+   * This one field is where a profile becomes real. It is read in exactly one
+   * place — as the first elements of the rendered argv — which is why it is the
+   * only correct home for the decision: a profile resolved anywhere else would
+   * mean two things deciding what an agent may touch, and the wrong one would
+   * be the one nobody reads.
+   *
+   * ```yaml
+   * permissionArgs:
+   *   default: ['--restricted', '--permission-prompts', 'none']
+   *   full-access: ['--permission-mode', 'bypassPermissions']
+   * ```
+   *
+   * **A bare array still parses** and means the same arguments whatever the
+   * profile — so every descriptor written before profiles existed, including a
+   * third party's, keeps working. It is not silently accepted, though: doctor
+   * says the provider cannot tell the profiles apart, which is the
+   * degrade-by-absence rule with the absence said out loud.
+   */
+  permissionArgs: z
+    .union([
+      z.array(z.string()),
+      closedWithExtensions({
+        default: z.array(z.string()).default([]),
+        'full-access': z.array(z.string()).default([]),
+      }),
+    ])
+    .default([]),
+
+  /**
+   * The flag that grants access to one more directory, if this CLI has one.
+   *
+   * Needed because a task's **artifacts do not live in its workspace**.
+   * `artifactsRoot` is deliberately under the project rather than the worktree
+   * — "a worktree is deleted when the work in it ends, and an artifact that
+   * disappears with the work it describes is no better than no artifact" — so a
+   * confined agent told to write `<project>/.xaedalon/...` is being told to
+   * write outside its own working directory. Without this, the Default profile
+   * would refuse every artifact a worktree project ever promised.
+   *
+   * Only emitted under a confined profile: under Full Access there is nothing
+   * to grant.
+   */
+  directoryFlag: z.string().min(1).optional(),
   extraArgs: z.array(z.string()).default([]),
   /** Redirected into stdin. Several CLIs hang without this when headless. */
   stdin: z.string().min(1).optional(),
@@ -140,4 +185,39 @@ export function parseProviderDescriptor(
 ): { descriptor?: ProviderDescriptor; error?: z.ZodError } {
   const parsed = descriptorSchema.safeParse(input)
   return parsed.success ? { descriptor: parsed.data } : { error: parsed.error }
+}
+
+/**
+ * The arguments that grant this CLI its authority under one profile.
+ *
+ * A bare array means the descriptor predates profiles, or its author decided
+ * one answer covers both. Either way it is used as written, so nothing that
+ * worked before stops working — and `distinguishesProfiles` below is how doctor
+ * finds out and says so.
+ */
+export function permissionArgsFor(
+  descriptor: ProviderDescriptor,
+  profile: ExecutionProfile,
+): readonly string[] {
+  const declared = descriptor.permissionArgs
+  if (Array.isArray(declared)) return declared
+  // No `?? []` here, and that is deliberate rather than an oversight: both keys
+  // carry `.default([])` in the schema, so a map naming one profile parses with
+  // the other one present and empty. A fallback would be unreachable code — and
+  // worse, the obvious fallback is "use the other profile's list", which for
+  // `default` would quietly mean Full Access. The schema is the guarantee, and
+  // it has a scenario of its own.
+  return declared[profile]
+}
+
+/**
+ * Whether this descriptor gives different answers for different profiles.
+ *
+ * False for a bare array. Worth asking rather than assuming, because a provider
+ * that cannot tell the profiles apart is one whose Default profile is only as
+ * confined as Factory's own boundary makes it — a true and useful thing to be
+ * told, and not a reason to refuse to run.
+ */
+export function distinguishesProfiles(descriptor: ProviderDescriptor): boolean {
+  return !Array.isArray(descriptor.permissionArgs)
 }

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { Capability } from '../capabilities.js'
 import type { CapabilityLookup } from '../host.js'
 import type { Problem } from '../problems.js'
+import type { ExecutionProfile } from '../security/profile.js'
 import { closedWithExtensions, problemsFromZod, slug } from './common.js'
 
 /**
@@ -59,6 +60,15 @@ export interface AgentSettings {
 /** What a planner is given. Variables are already substituted. */
 export interface PlanStepContext {
   readonly host: CapabilityLookup
+  /**
+   * How much authority this run gets.
+   *
+   * A step kind that renders a command for something else — which is what the
+   * `agent` kind does — needs it, because the profile is the difference between
+   * an unrestricted invocation and a confined one. A kind that runs its own
+   * command can ignore it.
+   */
+  readonly profile?: ExecutionProfile
   /**
    * Absolute directory the step will run in.
    *

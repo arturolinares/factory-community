@@ -29,7 +29,7 @@ Feature: Agent providers
     And the step asks for model "strong" and effort "max"
     When it is rendered for "claude"
     Then the command is "claude"
-    And the arguments include "--permission-mode bypassPermissions"
+    And the arguments include "--restricted"
     And the arguments include "--model opus"
     And the arguments include "--effort max"
     And the prompt is the last argument
@@ -150,3 +150,63 @@ Feature: Agent providers
       When it is rendered for "claude"
       Then the arguments do not include "--session-id"
       And it reports no session
+
+  Rule: the profile decides what the CLI is allowed to do
+
+    One field, read in one place — the first elements of the rendered argv. That
+    is what makes a profile real rather than advisory, and why no second place
+    is allowed to decide.
+
+    Every flag below was measured against Claude Code 2.1.273 rather than read
+    out of `--help`, because two configurations that read correctly did nothing
+    useful: `--tools default` left the session with no Bash at all, and
+    `--permission-mode dontAsk` denied every write.
+
+    Scenario: The Default profile confines the agent and never waits
+      Given an agent step with the prompt "Analyse WW2-1234"
+      When it is rendered for "claude" under "default"
+      Then the arguments include "--restricted"
+      And the arguments name the tools the agent needs
+      And the arguments include "--permission-prompts none"
+      And the arguments do not include "bypassPermissions"
+
+    Scenario: The Full Access profile removes the restriction
+      Given an agent step with the prompt "Analyse WW2-1234"
+      When it is rendered for "claude" under "full-access"
+      Then the arguments include "--permission-mode bypassPermissions"
+      And the arguments do not include "--restricted"
+
+    Scenario: A confined agent is given the directories it legitimately needs
+      Given an agent step with the prompt "Analyse WW2-1234"
+      And the artifacts directory "/repos/todolist/.xaedalon/.factory/tasks/t/artifacts" is allowed
+      When it is rendered for "claude" under "default"
+      # The artifacts root lives under the project, not the worktree, so
+      # without this the Default profile refuses the document it just asked for.
+      Then the arguments include "--add-dir /repos/todolist/.xaedalon/.factory/tasks/t/artifacts"
+
+    Scenario: An unconfined agent is given no directory grants
+      Given an agent step with the prompt "Analyse WW2-1234"
+      And the artifacts directory "/repos/todolist/.xaedalon/.factory/tasks/t/artifacts" is allowed
+      When it is rendered for "claude" under "full-access"
+      # Nothing to grant when nothing is withheld.
+      Then the arguments do not include "--add-dir"
+
+    Scenario: Copilot keeps its own path and network checking under Default
+      Given an agent step with the prompt "Analyse WW2-1234"
+      When it is rendered for "copilot" under "default"
+      Then the arguments include "--allow-all-tools"
+      And the arguments do not include "--allow-all-paths"
+      And the arguments do not include "--allow-all-urls"
+
+    Scenario: Copilot under Full Access allows everything
+      Given an agent step with the prompt "Analyse WW2-1234"
+      When it is rendered for "copilot" under "full-access"
+      Then the arguments include "--allow-all"
+
+    Scenario: Codex claims nothing under either profile
+      Given an agent step with the prompt "Analyse WW2-1234"
+      When it is rendered for "codex" under "default"
+      # Not installed on the machine this descriptor was written on, so its
+      # confinement has been measured not at all. An empty list is the honest
+      # answer; doctor says so out loud.
+      Then no permission arguments are rendered

@@ -5,6 +5,7 @@
  * Everything a plugin needs is re-exported by @factory/plugin-sdk; import from
  * there rather than reaching in here.
  */
+export * from './model-roles.js'
 export * from './capabilities.js'
 export * from './problems.js'
 export * from './hooks.js'

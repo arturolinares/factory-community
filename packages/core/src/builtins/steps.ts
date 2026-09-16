@@ -17,6 +17,7 @@ import {
 } from '../providers/capability.js'
 import { worktreeStepKind } from './worktree.js'
 import type { Problem } from '../problems.js'
+import { MODEL_ROLES, type ModelRole } from '../model-roles.js'
 import { artifactFile, artifactsRoot, joinPath } from '../task/paths.js'
 
 /**
@@ -73,20 +74,6 @@ export const shellStepKind: StepKindCapability = defineStepKind({
 export const isShellStep = (step: Step): step is ShellStep => step.uses === 'shell'
 
 // ---------------------------------------------------------------- agent
-
-/**
- * Which model to use, as a role rather than an id.
- *
- * The indirection is the point. Provider model ids move -- GitHub retired
- * Copilot ids mid-2026 and the CLI hard-errors on a stale one -- so a phase
- * that says `model: strong` keeps working across an id change, and the map
- * from role to id lives in the provider plugin as data.
- *
- * A literal id is still accepted for the case where a phase genuinely needs
- * one specific model.
- */
-export const MODEL_ROLES = ['strong', 'balanced', 'fast'] as const
-export type ModelRole = (typeof MODEL_ROLES)[number]
 
 /** How much context an agent carries between steps. */
 export const SESSION_SCOPES = ['task', 'workflow', 'phase', 'none'] as const
@@ -188,6 +175,13 @@ export const agentStepKind: StepKindCapability = defineStepKind({
       ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
       ...(context.resumeSession === undefined ? {} : { resumeSession: context.resumeSession }),
       ...(agent.args === undefined ? {} : { args: agent.args }),
+      ...(context.profile === undefined ? {} : { profile: context.profile }),
+      // The artifacts root, because it is deliberately *not* inside the
+      // workspace: it lives under the project so that an artifact outlives the
+      // worktree that produced it. A confined agent told to write there needs
+      // to be given the directory, or the first thing the Default profile does
+      // is refuse the document it just asked for.
+      allowedDirectories: [artifactsRootFor(context)],
     }
     const rendered = chosen.provider.render(request)
 

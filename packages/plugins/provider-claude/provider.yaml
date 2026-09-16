@@ -54,7 +54,44 @@ session:
   idFlag: '--session-id'
   resumeFlag: '--resume'
 
-permissionArgs: ['--permission-mode', 'bypassPermissions']
+# Verified against Claude Code 2.1.273 on 2026-09-15 by running it, because the
+# first two configurations read correctly in `--help` and did nothing useful:
+#
+#   --tools default            did NOT name the code-running tools back in;
+#                              the session had no Bash at all.
+#   --permission-mode dontAsk  means "do not ask, and deny" — Write was refused
+#                              session-wide.
+#
+# What the flags below were measured to do, in a neutral directory:
+#   write a file in the workspace      OK
+#   run a shell command                OK
+#   write a file outside the workspace REFUSED ("--restricted confines the file
+#                                      tools to the working directory")
+#   shell redirection outside it       REFUSED
+# and the run never hung, which is what `--permission-prompts none` buys:
+# anything that would prompt is denied instead of waiting for a person who
+# is not there.
+#
+# The tools have to be named because `--restricted` removes the code-running
+# ones and WebFetch unless `--tools` does. All twelve were accepted.
+permissionArgs:
+  default:
+    - '--restricted'
+    - '--tools'
+    - 'Bash,Edit,Write,Read,Glob,Grep,MultiEdit,NotebookEdit,TodoWrite,WebFetch,WebSearch,Task'
+    # Edits are applied without asking; `--restricted` refuses bypassPermissions
+    # anyway, so this is the most permissive mode available under it.
+    - '--permission-mode'
+    - 'acceptEdits'
+    - '--permission-prompts'
+    - 'none'
+  full-access: ['--permission-mode', 'bypassPermissions']
+
+# Measured to extend the confinement: a file in the added directory was written
+# and a third directory was still refused. Factory uses it for the artifacts
+# root, which lives under the project rather than the worktree.
+directoryFlag: '--add-dir'
+
 extraArgs: []
 
 # Non-interactive Claude waits on stdin without this.

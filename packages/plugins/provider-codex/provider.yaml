@@ -32,7 +32,16 @@ modelFlag: '--model'
 session:
   mode: none
 
-permissionArgs: []
+# Empty for both profiles, and that is a refusal to claim rather than a decision.
+# The Codex CLI is not installed on the machine this was written on, so nothing
+# about its confinement has been measured — see `provisional` below. Its docs
+# describe a `--sandbox workspace-write` mode that looks like exactly the right
+# Default, which is precisely why it is not written here: a flag that reads
+# correctly and does nothing is the mistake this increment has already made once
+# today.
+permissionArgs:
+  default: []
+  full-access: []
 extraArgs: []
 stdin: /dev/null
 env: {}

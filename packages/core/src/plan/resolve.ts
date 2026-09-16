@@ -280,6 +280,7 @@ export function resolvePlan(request: PlanRequest): PlanResult {
         host,
         cwd,
         artifacts,
+        profile,
         ...(lookupAgent === undefined ? {} : { lookupAgent }),
         ...(request.defaultProvider === undefined ? {} : { defaultProvider: request.defaultProvider }),
         ...(request.session === undefined
