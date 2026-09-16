@@ -1,7 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import { scaffoldProjectDefinitions } from '@factory/config'
-import { EXECUTION_PROFILES, isExecutionProfile } from '@factory/core'
-import type { ExecutionProfile, Project, ProjectSetting } from '@factory/core'
+import {
+  DISCLAIMER,
+  EXECUTION_PROFILES,
+  NOT_ACCEPTED,
+  hasAccepted,
+  isExecutionProfile,
+  queueOrder,
+} from '@factory/core'
+import type { ExecutionProfile, Project, ProjectSetting, Task } from '@factory/core'
 import type { Runtime } from '@factory/runtime'
 import type { Service } from '../service.js'
 
@@ -38,6 +45,16 @@ export function registerProjectRoutes(
   runtime: Runtime,
 ): void {
   const { projects, tasks, chains } = service
+
+  /**
+   * Whether this installation has been told what an agent run can reach.
+   *
+   * Read fresh each time rather than captured, the same way the task routes
+   * read it: accepting has to take effect without a restart, and the holder is
+   * the one live copy.
+   */
+  const accepted = (): boolean => hasAccepted(runtime.settings.current().security.acceptedVersion)
+
 
   /**
    * Put the definitions a setting needs into the project, and say what landed.
@@ -188,6 +205,113 @@ export function registerProjectRoutes(
         .code(400)
         .send({ error: error instanceof Error ? error.message : String(error) })
     }
+  })
+
+  /**
+   * Queue everything in this project that can be queued, in dependency order.
+   *
+   * One request rather than one per task. The board holds one error and one
+   * acting id, with nowhere to put a partial refusal, and the disclaimer should
+   * be answered once for a batch rather than ten times over.
+   *
+   * Every task goes through the ordinary `queue` action, so each takes its
+   * `MAX(queue_position) + 1` ticket **in dependency order** — which is what
+   * makes the queue's advisory ordering agree with the graph rather than merely
+   * not contradict it. The scheduler would hold the dependents either way; this
+   * is so the board reads in the order the work will happen.
+   *
+   * `draft` and `blocked` are what a person means by "everything": a blocked
+   * task is usually blocked on something that has since been dealt with.
+   * Never `done` or `cancelled` — one click must not set five agents on work
+   * that already finished.
+   */
+  app.post<{ Params: { id: string } }>('/api/projects/:id/queue', async (request, reply) => {
+    const project = projects.get(request.params.id)
+    if (project === undefined) {
+      return reply.code(404).send({ error: `No project ${request.params.id}.` })
+    }
+    // The same gate the single `queue` has, asked once. Queueing is what leads
+    // to an agent running, whether it is one task or ten.
+    if (!accepted()) {
+      return reply.code(409).send({ error: NOT_ACCEPTED, disclaimer: DISCLAIMER })
+    }
+
+    const candidates = tasks
+      .list({ projectId: project.id })
+      .filter((task) => task.state === 'draft' || task.state === 'blocked')
+    const { order, problems } = queueOrder(
+      candidates.map((task) => task.id),
+      tasks.dependenciesIn(project.id),
+    )
+    // Only a hand-edited database can hold a ring — the store refuses one at
+    // the door. Worth refusing rather than ignoring all the same: the walk
+    // cannot place a ring's members, so carrying on would queue everything
+    // else and silently leave those out.
+    if (problems.length > 0) {
+      return reply.code(409).send({
+        error: 'These tasks depend on each other in a ring, so there is no order to queue them in.',
+        problems,
+      })
+    }
+
+    const byId = new Map(candidates.map((task) => [task.id, task]))
+    const queued: Task[] = []
+    const skipped: { task: Task; reason: string }[] = []
+    for (const id of order) {
+      const task = byId.get(id) as Task
+      // Nothing ticked is nothing to run, and the state machine says so. Said
+      // out loud rather than failing the batch: a project usually has a draft
+      // somebody has not planned yet.
+      if (!tasks.actions(id).some((entry) => entry.action === 'queue')) {
+        skipped.push({ task, reason: 'nothing in its plan is ticked' })
+        continue
+      }
+      queued.push(tasks.act(id, 'queue'))
+    }
+    return { queued, skipped }
+  })
+
+  /**
+   * Stop everything in flight in this project.
+   *
+   * Cancels what is running, what is waiting for a person, and what is in the
+   * queue, then makes sure the processes are gone.
+   *
+   * Cancelling the queued ones is not optional: a transition wakes the
+   * scheduler, so a stop that only killed processes would visibly start the
+   * next task within a tick.
+   *
+   * `draft` and `blocked` are deliberately left alone, which is where this
+   * differs from the global kill switch. Neither is happening, both are what
+   * Queue all picks up from, and one click must not quietly clear the work
+   * somebody has planned but not started.
+   *
+   * Never gated on the disclaimer, for the reason `/api/runs/stop` is not:
+   * refusing to *stop* work because nobody has agreed to a notice would be the
+   * most hostile possible reading of a safety feature.
+   */
+  app.post<{ Params: { id: string } }>('/api/projects/:id/stop', async (request, reply) => {
+    const project = projects.get(request.params.id)
+    if (project === undefined) {
+      return reply.code(404).send({ error: `No project ${request.params.id}.` })
+    }
+
+    const cancelled: Task[] = []
+    let signalled = 0
+    let killed = 0
+    for (const task of tasks.list({ projectId: project.id })) {
+      if (task.state !== 'running' && task.state !== 'awaiting_approval' && task.state !== 'queued') {
+        continue
+      }
+      cancelled.push(tasks.act(task.id, 'cancel', { reason: 'Stopped by request.' }))
+      // The engine's watcher also reacts to the transition, on a microtask.
+      // Asked directly as well so the answer this request returns is the truth
+      // rather than whatever had happened by the time it was serialised.
+      const report = await service.engine.cancel(task.id)
+      signalled += report.signalled
+      killed += report.killed
+    }
+    return { cancelled, signalled, killed }
   })
 
   app.delete<{ Params: { id: string } }>('/api/projects/:id', async (request, reply) => {

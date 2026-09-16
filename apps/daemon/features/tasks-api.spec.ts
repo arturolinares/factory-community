@@ -2285,4 +2285,299 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       And('the task is "done"', () => expect(stateOf()).toBe('done'))
     })
   })
+
+  Rule('a project can be queued and stopped in one request', ({ RuleScenario }) => {
+    const ids = new Map<string, string>()
+    /** The project these scenarios act on. Never the Background's. */
+    let batchProject = ''
+
+    /**
+     * A daemon whose scheduler does not react.
+     *
+     * The Background's does, deliberately — most of this file is about work
+     * actually running. These scenarios are about what is *in the queue*, and
+     * on a live scheduler a queued task is running by the time the response is
+     * serialised. `autoStart: false` is how the Service describes exactly that.
+     *
+     * `accepted` says whether anybody has agreed to the disclaimer, so the two
+     * scenarios about the gate describe a fresh installation rather than
+     * deleting a file behind a daemon that has already read it.
+     */
+    const quietDaemon = (accepted: boolean) => async (): Promise<void> => {
+      const fresh = mkdtempSync(join(tmpdir(), 'factory-batch-'))
+      const work = join(fresh, 'work')
+      const freshScope = join(work, '.xaedalon', '.factory')
+      mkdirSync(join(work, '.git'), { recursive: true })
+      file(join(freshScope, 'config.yaml'), 'kind: factory.scope/v1\nscope: user\n')
+      file(join(freshScope, 'workflows', 'hello.workflow.yaml'), 'name: hello\nphases: [greet]\n')
+      file(
+        join(freshScope, 'phases', 'greet.phase.yaml'),
+        'name: greet\nsteps: [{run: echo hello}]\n',
+      )
+      if (accepted) {
+        file(
+          join(freshScope, 'settings.json'),
+          JSON.stringify({ security: { acceptedVersion: DISCLAIMER_VERSION } }),
+        )
+      }
+      const env = { FACTORY_HOME: freshScope }
+      const chain = resolveScopes({ cwd: work, env })
+      const freshRuntime = await createRuntime({ cwd: work, env, chain })
+      const freshService = await createService(freshRuntime, {
+        file: join(fresh, 'state.db'),
+        autoStart: false,
+      })
+      // Replaces the Background's daemon for this scenario. The old one's
+      // teardown still runs, and this one's directory goes with the scenario.
+      app = buildServer(freshRuntime, freshService, {})
+      service = freshService
+      roots.push(fresh)
+      await addProject('work', work)
+      batchProject = projectId
+    }
+
+    const taskIn = (name: string, workflows?: string[]) => async (): Promise<void> => {
+      await call('POST', '/api/tasks', {
+        name,
+        projectId: batchProject,
+        ...(workflows === undefined ? {} : { workflows }),
+      })
+      ids.set(name, (response.body.task as { id: string }).id)
+    }
+    const taskNowhere = (name: string) => async (): Promise<void> => {
+      await call('POST', '/api/tasks', { name, workflows: ['hello'] })
+      ids.set(name, (response.body.task as { id: string }).id)
+    }
+    const idOf = (name: string) => ids.get(name) as string
+    const act = (name: string, action: string) => async (): Promise<void> => {
+      await call('POST', `/api/tasks/${idOf(name)}/actions/${action}`)
+    }
+    const blocked = (name: string) => (): void => {
+      // `block` is internal — the scheduler's, not a client's — so this is the
+      // store, which is where a blocked task comes from in the first place.
+      service.tasks.act(idOf(name), 'queue')
+      service.tasks.act(idOf(name), 'block', { reason: 'the tests failed' })
+    }
+    const waitFor = (name: string, blocker: string) => async (): Promise<void> => {
+      await call('POST', `/api/tasks/${idOf(name)}/dependencies`, { dependsOn: idOf(blocker) })
+    }
+    const queueAll = async (): Promise<void> => {
+      await call('POST', `/api/projects/${batchProject}/queue`)
+    }
+    const stopAll = async (): Promise<void> => {
+      await call('POST', `/api/projects/${batchProject}/stop`)
+    }
+    const queued = () => (response.body.queued as { id: string; name: string }[] | undefined) ?? []
+    const cancelled = () => (response.body.cancelled as { id: string }[] | undefined) ?? []
+    const stateOfTask = async (name: string): Promise<string> => {
+      await call('GET', `/api/tasks/${idOf(name)}`)
+      return (response.body.task as { state: string }).state
+    }
+    const positionOf = (name: string): number =>
+      service.tasks.get(idOf(name))?.queuePosition ?? 0
+    const status = (code: number) => (): void => expect(response.statusCode).toBe(code)
+
+    RuleScenario('Queue all queues every draft in the project', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('the task "Two" exists in the project with a workflow', taskIn('Two', ['hello']))
+      When('I queue the whole project', queueAll)
+      Then('the response is 200', status(200))
+      And('2 tasks were queued', () => expect(queued()).toHaveLength(2))
+      And('both are "queued"', async () => {
+        expect(await stateOfTask('One')).toBe('queued')
+        expect(await stateOfTask('Two')).toBe('queued')
+      })
+    })
+
+    RuleScenario('Queue all queues in dependency order', ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('the task "Two" exists in the project with a workflow', taskIn('Two', ['hello']))
+      And('"One" is made to wait for "Two"', waitFor('One', 'Two'))
+      When('I queue the whole project', queueAll)
+      Then('the queued tasks are "Two, One" in that order', () =>
+        expect(queued().map((task) => task.name)).toEqual(['Two', 'One']),
+      )
+      And('"Two" is earlier in the queue than "One"', () =>
+        expect(positionOf('Two')).toBeLessThan(positionOf('One')),
+      )
+    })
+
+    RuleScenario('Queue all leaves a task with nothing ticked alone, and says so', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('the task "Nothing planned" exists in the project', taskIn('Nothing planned'))
+      When('I queue the whole project', queueAll)
+      Then('1 task was queued', () => expect(queued()).toHaveLength(1))
+      And('"Nothing planned" was skipped because nothing in its plan is ticked', () => {
+        const skipped = response.body.skipped as { task: { name: string }; reason: string }[]
+        expect(skipped).toEqual([
+          { task: expect.objectContaining({ name: 'Nothing planned' }), reason: 'nothing in its plan is ticked' },
+        ])
+      })
+    })
+
+    RuleScenario('Queue all picks up a blocked task', ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('"One" is blocked', blocked('One'))
+      When('I queue the whole project', queueAll)
+      Then('1 task was queued', () => expect(queued()).toHaveLength(1))
+    })
+
+    RuleScenario('Queue all leaves finished work finished', ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('"One" is marked done', act('One', 'mark_done'))
+      When('I queue the whole project', queueAll)
+      Then('0 tasks were queued', () => expect(queued()).toEqual([]))
+    })
+
+    RuleScenario("Queue all ignores another project's tasks", ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('a task "Elsewhere" with a workflow in no project', taskNowhere('Elsewhere'))
+      When('I queue the whole project', queueAll)
+      Then('1 task was queued', () => expect(queued()).toHaveLength(1))
+    })
+
+    RuleScenario('Queue all is refused until the disclaimer is accepted', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('nothing has been accepted on this installation', quietDaemon(false))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      When('I queue the whole project', queueAll)
+      Then('the response is 409', status(409))
+      And('the response carries the disclaimer', () => {
+        const disclaimer = (response.body as { disclaimer?: { summary?: string } }).disclaimer
+        expect(disclaimer?.summary).toContain('inside the workspace')
+      })
+    })
+
+    RuleScenario('A ring no route could have made refuses the whole batch', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('the task "Two" exists in the project with a workflow', taskIn('Two', ['hello']))
+      And('a ring between them written straight into the database', () => {
+        // Straight into the table on purpose: `dependOn` refuses a ring, so
+        // there is no other way to describe a database that holds one.
+        const pairs: [string, string][] = [
+          [idOf('One'), idOf('Two')],
+          [idOf('Two'), idOf('One')],
+        ]
+        for (const [task, blocker] of pairs) {
+          service.store.db.run(
+            'INSERT INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)',
+            task,
+            blocker,
+          )
+        }
+      })
+      When('I queue the whole project', queueAll)
+      Then('the response is 409', status(409))
+      // Before the states are read: asking for a task replaces the response
+      // this scenario is about.
+      And('the response names the ring', () => {
+        const problems = response.body.problems as { rule: string }[]
+        expect(problems.map((problem) => problem.rule)).toContain('dependencies.cycle')
+      })
+      And('nothing was queued', async () => {
+        expect(await stateOfTask('One')).toBe('draft')
+        expect(await stateOfTask('Two')).toBe('draft')
+      })
+    })
+
+    RuleScenario('Queueing a project that is not there is not found', ({ When, Then }) => {
+      When('I queue a project that does not exist', () =>
+        call('POST', '/api/projects/nope/queue'),
+      )
+      Then('the response is 404', status(404))
+    })
+
+    RuleScenario('Stop all cancels what is in the queue', ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('the task "Two" exists in the project with a workflow', taskIn('Two', ['hello']))
+      And('the whole project is queued', queueAll)
+      When('I stop the whole project', stopAll)
+      Then('the response is 200', status(200))
+      And('2 tasks were cancelled', () => expect(cancelled()).toHaveLength(2))
+      And('nothing in the project is queued', () =>
+        expect(
+          service.tasks.list({ projectId: batchProject }).filter((task) => task.state === 'queued'),
+        ).toEqual([]),
+      )
+    })
+
+    RuleScenario('Stop all leaves a draft alone', ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      When('I stop the whole project', stopAll)
+      Then('0 tasks were cancelled', () => expect(cancelled()).toEqual([]))
+      And('"One" is "draft"', async () => expect(await stateOfTask('One')).toBe('draft'))
+    })
+
+    RuleScenario('Stop all leaves a blocked task alone', ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('"One" is blocked', blocked('One'))
+      When('I stop the whole project', stopAll)
+      Then('0 tasks were cancelled', () => expect(cancelled()).toEqual([]))
+      And('"One" is "blocked"', async () => expect(await stateOfTask('One')).toBe('blocked'))
+    })
+
+    RuleScenario('Stop all leaves finished work alone', ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('"One" is marked done', act('One', 'mark_done'))
+      When('I stop the whole project', stopAll)
+      Then('0 tasks were cancelled', () => expect(cancelled()).toEqual([]))
+      And('"One" is "done"', async () => expect(await stateOfTask('One')).toBe('done'))
+    })
+
+    RuleScenario("Stop all ignores another project's tasks", ({ Given, And, When, Then }) => {
+      Given('the project "work" exists here', quietDaemon(true))
+      And('the task "One" exists in the project with a workflow', taskIn('One', ['hello']))
+      And('a task "Elsewhere" with a workflow in no project', taskNowhere('Elsewhere'))
+      And('the whole project is queued', queueAll)
+      And('"Elsewhere" is queued', act('Elsewhere', 'queue'))
+      When('I stop the whole project', stopAll)
+      Then('1 task was cancelled', () => expect(cancelled()).toHaveLength(1))
+      And('"Elsewhere" is "queued"', async () =>
+        expect(await stateOfTask('Elsewhere')).toBe('queued'),
+      )
+    })
+
+    RuleScenario('Stop all is never gated on the disclaimer', ({ Given, When, Then }) => {
+      Given('nothing has been accepted on this installation', quietDaemon(false))
+      When('I stop the whole project', stopAll)
+      Then('the response is 200', status(200))
+    })
+
+    RuleScenario('Stopping a project that is not there is not found', ({ When, Then }) => {
+      When('I stop a project that does not exist', () =>
+        call('POST', '/api/projects/nope/stop'),
+      )
+      Then('the response is 404', status(404))
+    })
+  })
 })

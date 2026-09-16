@@ -856,3 +856,145 @@ Feature: Tasks, runs and live updates over HTTP
       When "Scaffold" is marked done
       Then the response is 200
       And the task is "done"
+
+  Rule: a project can be queued and stopped in one request
+
+    One request rather than one per task. The board holds one error and one
+    acting id, with nowhere to put a partial refusal, and the disclaimer should
+    be answered once for a batch rather than ten times over.
+
+    Queue all takes the drafts and the blocked tasks, in dependency order, so
+    the queue reads in the order the work will happen. Stop all takes what is
+    in flight or in line, and deliberately leaves the drafts and the blocked
+    alone: neither is happening, both are what Queue all picks up from, and one
+    click must not quietly clear work somebody has planned.
+
+    Scenario: Queue all queues every draft in the project
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And the task "Two" exists in the project with a workflow
+      When I queue the whole project
+      Then the response is 200
+      And 2 tasks were queued
+      And both are "queued"
+
+    Scenario: Queue all queues in dependency order
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And the task "Two" exists in the project with a workflow
+      And "One" is made to wait for "Two"
+      When I queue the whole project
+      # The queue is a priority, not a barrier, so this is not what holds the
+      # work back — the scheduler does that. It is so the board reads in the
+      # order things will happen.
+      Then the queued tasks are "Two, One" in that order
+      And "Two" is earlier in the queue than "One"
+
+    Scenario: Queue all leaves a task with nothing ticked alone, and says so
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And the task "Nothing planned" exists in the project
+      When I queue the whole project
+      Then 1 task was queued
+      And "Nothing planned" was skipped because nothing in its plan is ticked
+
+    Scenario: Queue all picks up a blocked task
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And "One" is blocked
+      When I queue the whole project
+      Then 1 task was queued
+
+    Scenario: Queue all leaves finished work finished
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And "One" is marked done
+      When I queue the whole project
+      # One click must never set five agents on work that already happened.
+      Then 0 tasks were queued
+
+    Scenario: Queue all ignores another project's tasks
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And a task "Elsewhere" with a workflow in no project
+      When I queue the whole project
+      Then 1 task was queued
+
+    Scenario: Queue all is refused until the disclaimer is accepted
+      Given nothing has been accepted on this installation
+      And the task "One" exists in the project with a workflow
+      When I queue the whole project
+      Then the response is 409
+      And the response carries the disclaimer
+
+    Scenario: A ring no route could have made refuses the whole batch
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And the task "Two" exists in the project with a workflow
+      And a ring between them written straight into the database
+      When I queue the whole project
+      # The store refuses a ring at the door, so only a hand-edited database
+      # gets here. Refused rather than ignored: the walk cannot place a ring's
+      # members, so carrying on would queue everything else and silently leave
+      # those out.
+      Then the response is 409
+      And the response names the ring
+      And nothing was queued
+
+    Scenario: Queueing a project that is not there is not found
+      When I queue a project that does not exist
+      Then the response is 404
+
+    Scenario: Stop all cancels what is in the queue
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And the task "Two" exists in the project with a workflow
+      And the whole project is queued
+      When I stop the whole project
+      Then the response is 200
+      And 2 tasks were cancelled
+      And nothing in the project is queued
+
+    Scenario: Stop all leaves a draft alone
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      When I stop the whole project
+      Then 0 tasks were cancelled
+      And "One" is "draft"
+
+    Scenario: Stop all leaves a blocked task alone
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And "One" is blocked
+      When I stop the whole project
+      Then 0 tasks were cancelled
+      And "One" is "blocked"
+
+    Scenario: Stop all leaves finished work alone
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And "One" is marked done
+      When I stop the whole project
+      Then 0 tasks were cancelled
+      And "One" is "done"
+
+    Scenario: Stop all ignores another project's tasks
+      Given the project "work" exists here
+      And the task "One" exists in the project with a workflow
+      And a task "Elsewhere" with a workflow in no project
+      And the whole project is queued
+      And "Elsewhere" is queued
+      When I stop the whole project
+      Then 1 task was cancelled
+      And "Elsewhere" is "queued"
+
+    Scenario: Stop all is never gated on the disclaimer
+      Given nothing has been accepted on this installation
+      When I stop the whole project
+      # Refusing to stop work because nobody agreed to a notice would be the
+      # most hostile possible reading of a safety feature.
+      Then the response is 200
+
+    Scenario: Stopping a project that is not there is not found
+      When I stop a project that does not exist
+      Then the response is 404
