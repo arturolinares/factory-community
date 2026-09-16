@@ -25,8 +25,8 @@ export interface LiveConnection {
  *
  * A second, partial copy of `FactoryEvents` — every new event has to be added
  * here too, and forgetting is invisible: the board simply stops updating for
- * that one. `approval.granted` was missing for exactly that reason. Recorded in
- * improvements.md as something to derive rather than maintain; until then, this
+ * that one. `approval.granted` was missing for exactly that reason. It should
+ * be derived from the registry rather than maintained here; until it is, this
  * comment is the warning.
  */
 const EVENTS = [

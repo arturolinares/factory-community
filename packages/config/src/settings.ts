@@ -169,9 +169,9 @@ export function writeSettings(
   const current = readSettings(chain).settings
   // Merged one level down, per named group. The cost of that is this function:
   // a new top-level group not added here is written nowhere and *silently* —
-  // the call succeeds, the file is rewritten, and the new value is gone. Noted
-  // in improvements.md as the thing to replace; asserted meanwhile by scenarios
-  // that write one group and check the others survived.
+  // the call succeeds, the file is rewritten, and the new value is gone. Worth
+  // replacing with something that cannot be forgotten; until then it is held by
+  // scenarios that write one group and check the others survived.
   const merged = {
     ...current,
     kind: SETTINGS_KIND,
