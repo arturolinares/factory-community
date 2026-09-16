@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { useSettings } from './settings.js'
 import { computed, reactive, ref } from 'vue'
 import {
   ApiError,
@@ -90,6 +91,17 @@ export const useTasks = defineStore('tasks', () => {
       await api.actOnTask(id, action)
       await load()
     } catch (caught) {
+      // The board queues tasks too, so it needs the same answer the task page
+      // gives: a refusal for want of an acceptance becomes the panel, not a red
+      // message. One decision, in the settings store, two callers.
+      if (
+        useSettings().handledRefusal(caught, async () => {
+          await api.actOnTask(id, action)
+          await load()
+        })
+      ) {
+        return
+      }
       error.value = caught instanceof ApiError ? caught.message : String(caught)
     } finally {
       acting.value = undefined

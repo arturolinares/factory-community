@@ -620,12 +620,13 @@ network policy, secrets as resources, database policy, execution limits,
 checkpoints, custom profiles, MCP resources, multi-root workspaces and
 production labelling.
 
-**Not verified in a browser.** This increment's fourteen `task-board.feature`
-scenarios are written and unrun: the browser suite needs `127.0.0.1:7317`, and
-Pro's desktop app holds it whenever it is open. Everything below the browser is
-green, including the profile's own scenarios, but the first-run panel and the
-Full Access marker have been exercised only by the web build and by reading.
-`pnpm test:e2e` with the desktop app quit is the outstanding check.
+**Verified in a browser**, once the desktop app was quit — it holds
+`127.0.0.1:7317`, which the suite needs. 132 scenarios pass, and the five new
+ones found two bugs that nothing below the browser could have: the disclaimer
+panel keyed off "nothing accepted" rather than "a run was refused", so it sat
+over the board on load and blocked reading; and accepting it dismissed the panel
+without doing the thing that had been refused, while the button said *Continue*.
+Both are guarded — reverting either fails the scenario that found it.
 
 ## Glossary
 

@@ -39,6 +39,28 @@ export const useSettings = defineStore('settings', () => {
    * board must not flash a disclaimer at somebody who has already accepted it.
    */
   const accepted = ref<boolean | undefined>(undefined)
+  /**
+   * Whether to show the disclaimer *now*.
+   *
+   * Separate from `accepted`, and that separation is the whole behaviour. The
+   * first version drew the panel whenever nothing had been accepted, which put
+   * it over the board on load — and browsing is not running. It is raised when
+   * a run is actually refused, so it appears where the button was pressed.
+   */
+  const needsAcceptance = ref(false)
+  /**
+   * What to do once it has been accepted.
+   *
+   * The button says "Continue", and continuing means the thing the person
+   * asked for happens. Without this, accepting dismisses a panel and leaves
+   * them to press Queue a second time — which is a worse reading of the same
+   * word, and a person who has just read a page about agent autonomy has
+   * already decided.
+   *
+   * One deep, and cleared whether it succeeds or fails: a retry that itself
+   * gets refused must not queue another retry.
+   */
+  let continueWith: (() => Promise<void>) | undefined
 
   // Optional all the way down, including *inside* a settings object that
   // exists. A board served by an older daemon gets a settings object with no
@@ -113,7 +135,11 @@ export const useSettings = defineStore('settings', () => {
       const answer = await api.acceptDisclaimer()
       settings.value = answer.settings
       accepted.value = answer.accepted
+      needsAcceptance.value = false
       error.value = undefined
+      const resume = continueWith
+      continueWith = undefined
+      if (resume !== undefined) await resume()
       return true
     } catch (caught) {
       error.value = caught instanceof ApiError ? caught.message : String(caught)
@@ -132,14 +158,32 @@ export const useSettings = defineStore('settings', () => {
   }
 
   /**
-   * Notice that a run was refused for want of an acceptance.
+   * Was this refusal the disclaimer, and if so, show it.
    *
-   * Called by whatever caught the refusal, so the panel appears wherever
-   * somebody pressed the button rather than only where they happened to reload.
-   * The daemon is the gate; this is the board catching up with it.
+   * One implementation, two callers — the task page and the board both queue
+   * tasks, and a refusal that became the panel on one and a red error message
+   * on the other would be the same idea twice. Returns whether it handled the
+   * error, so the caller knows not to also report it.
+   *
+   * Narrow on purpose: it opens a modal, so it checks for the payload the
+   * daemon actually sends rather than trusting the status code alone.
    */
-  function refusedForAcceptance(): void {
+  function handledRefusal(caught: unknown, retry?: () => Promise<void>): boolean {
+    if (!(caught instanceof ApiError) || caught.status !== 409) return false
+    const body = caught.body
+    const carriesDisclaimer =
+      typeof body === 'object' &&
+      body !== null &&
+      typeof (body as { disclaimer?: unknown }).disclaimer === 'object'
+    if (!carriesDisclaimer) return false
+
     accepted.value = false
+    needsAcceptance.value = true
+    continueWith = retry
+    // The wording comes from the daemon; a board that has not loaded it yet has
+    // nothing to show, so fetch it before the panel is looked for.
+    if (disclaimer.value === undefined) void load()
+    return true
   }
 
   return {
@@ -152,10 +196,11 @@ export const useSettings = defineStore('settings', () => {
     unconfined,
     disclaimer,
     accepted,
+    needsAcceptance,
     load,
     setScale,
     setProfile,
     accept,
-    refusedForAcceptance,
+    handledRefusal,
   }
 })

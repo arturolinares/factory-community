@@ -10,11 +10,14 @@ import { useSettings } from '../stores/settings.js'
  * about it, so the first way anybody found out what a run could reach was by
  * reading the source.
  *
- * Shown over the board rather than as a page of its own, and only when the
- * daemon says nothing has been accepted — so it appears wherever somebody
- * pressed the button that was refused, rather than only where they happened to
- * reload. Browsing costs nothing: the daemon gates *starting a run*, and so
- * does this.
+ * Shown over the board rather than as a page of its own, and only once a run
+ * has actually been refused — so it appears wherever somebody pressed the
+ * button, rather than over the board on every load. Browsing costs nothing:
+ * the daemon gates *starting a run*, and so does this.
+ *
+ * The first version keyed off "nothing has been accepted", which put a modal
+ * in front of a person who had come to read. The board's own scenario caught
+ * it.
  *
  * The wording is the daemon's, served with the settings. A copy here would be
  * the copy that drifts from what somebody actually agreed to.
@@ -34,7 +37,7 @@ async function accept(): Promise<void> {
 
 <template>
   <div
-    v-if="settings.accepted === false && settings.disclaimer !== undefined"
+    v-if="settings.needsAcceptance && settings.disclaimer !== undefined"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6"
     data-testid="disclaimer"
     role="dialog"

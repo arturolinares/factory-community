@@ -224,12 +224,15 @@ async function act(action: string): Promise<void> {
     await load()
   } catch (caught) {
     // A 409 carrying a disclaimer is the daemon saying nobody has been told
-    // what a run can reach. Turned into the panel rather than into an error
-    // message, so it appears where the button was pressed — which is the point
-    // of gating in the daemon and not only on first load.
-    if (caught instanceof ApiError && caught.status === 409 && hasDisclaimer(caught.body)) {
-      settings.refusedForAcceptance()
-      if (settings.disclaimer === undefined) await settings.load()
+    // what a run can reach. It becomes the panel rather than a red message, so
+    // it appears where the button was pressed — which is the point of gating in
+    // the daemon and not on first load.
+    if (
+      settings.handledRefusal(caught, async () => {
+        await api.actOnTask(id.value, action)
+        await load()
+      })
+    ) {
       return
     }
     error.value = caught instanceof ApiError ? caught.message : String(caught)
@@ -238,15 +241,6 @@ async function act(action: string): Promise<void> {
   }
 }
 
-/** Whether a refusal was this refusal. Narrow on purpose: it gates a modal. */
-function hasDisclaimer(body: unknown): boolean {
-  return (
-    typeof body === 'object' &&
-    body !== null &&
-    'disclaimer' in body &&
-    typeof (body as { disclaimer?: unknown }).disclaimer === 'object'
-  )
-}
 
 /** What this task's project can run, which is not what the installation can. */
 async function loadWorkflows(): Promise<void> {

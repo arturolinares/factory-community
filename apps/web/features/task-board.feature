@@ -711,12 +711,16 @@ Feature: The task board
       And it names the profile that removes the boundaries
       And it says plainly that Factory is not a sandbox
 
-    Scenario: Accepting it lets the work start
+    Scenario: Accepting it continues what was refused
       When I open the tasks page
       And I create the task "Add due dates" on "hello"
       And I queue it
       And I accept the disclaimer
       Then the disclaimer is gone
+      # The button says "Continue", so continuing is what it does: the queue
+      # that was refused happens. A person who has just read a page about agent
+      # autonomy has already decided, and making them press it twice is a worse
+      # reading of the same word.
       And "Add due dates" leaves "draft"
 
   Rule: Full Access is impossible to miss
