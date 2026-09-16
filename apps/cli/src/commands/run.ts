@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline/promises'
 import {
+  hasAccepted,
+  NOT_ACCEPTED,
   runPlan,
   toShellString,
   type ResolvedPhase,
@@ -47,6 +49,16 @@ export async function run(
     write: () => {},
   },
 ): Promise<CommandResult> {
+  // The same gate the daemon puts on queueing, because this is the other way an
+  // agent actually starts. Two call sites, one decision function — they are two
+  // entry points, not two implementations.
+  //
+  // Not on `--dry-run`: it executes nothing, and refusing to *show* somebody
+  // what would happen until they have agreed to what happens is backwards.
+  if (flags.dryRun !== true && !hasAccepted(context.settings.current().security.acceptedVersion)) {
+    return failed([NOT_ACCEPTED, '', 'Run "factory accept --show" to read it first.'])
+  }
+
   const workspace = flags.workspace ?? context.cwd
 
   const planned = planWorkflow({

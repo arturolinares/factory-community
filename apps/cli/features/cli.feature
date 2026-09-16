@@ -279,3 +279,82 @@ Feature: The factory command
     Scenario: A verb nobody recognises is a usage error
       When I run "plugins wiggle @factory/task-diffity"
       Then it is a usage error
+
+  Rule: the terminal can accept the disclaimer, read the profile, and stop everything
+
+    The daemon refuses to start a run until somebody has been told what a run
+    can reach, and it refuses that for every client. So the terminal needs a way
+    to say yes — otherwise the gate is a browser feature with a command-line
+    hole in it, and anybody automating Factory is told to go and click
+    something.
+
+    Scenario: The disclaimer can be read without agreeing to it
+      Given nothing has been accepted
+      When I run "accept --show"
+      Then it succeeds
+      And the output says what an agent can do inside the workspace
+      And the output names the profile that removes the boundaries
+      And the output says it has not been accepted
+      And nothing was recorded
+
+    Scenario: Accepting it records the current version
+      Given nothing has been accepted
+      When I run "accept"
+      Then it succeeds
+      And the output says Factory will not ask again
+      And the settings file records the accepted version
+
+    Scenario: Accepting it twice says so and changes nothing
+      Given nothing has been accepted
+      And I have run "accept"
+      When I run "accept"
+      Then it succeeds
+      And the output says it was already accepted
+
+    Scenario: Running a workflow before accepting is refused
+      Given nothing has been accepted
+      When I run "run hello-world --yes"
+      Then it fails
+      And the output says how to accept it
+
+    Scenario: A dry run needs no acceptance
+      Given nothing has been accepted
+      When I run "run hello-world --dry-run"
+      # Refusing to *show* somebody what would happen until they have agreed to
+      # what happens is backwards. Nothing executes.
+      Then it succeeds
+
+    Scenario: The installation profile can be read
+      When I run "profile"
+      Then it succeeds
+      And the output says the profile is "Default"
+
+    Scenario: The installation profile can be changed
+      When I run "profile full-access"
+      Then it succeeds
+      And the output says the profile is "Full Access"
+      And the output warns about what Full Access removes
+
+    Scenario: A profile that is not one is refused
+      When I run "profile sort-of-safe"
+      Then it fails
+      And the output names the profiles
+
+    Scenario: Stopping needs to be asked for plainly
+      When I run "stop"
+      # "stop" alone reads as though it might mean one thing, and the one thing
+      # it means is everything.
+      Then the exit code is 2
+      And the output mentions "--all"
+
+    Scenario: Stopping everything reports what it stopped
+      Given the daemon says two process groups were stopped
+      When I run "stop --all"
+      Then it succeeds
+      And the output says 2 process groups were stopped
+
+    Scenario: Stopping when nothing runs says so
+      Given the daemon says nothing was running
+      When I run "stop --all"
+      Then it succeeds
+      And the output says nothing was running

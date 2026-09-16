@@ -2,6 +2,7 @@ import { createRuntime } from '@factory/runtime'
 import { styleFor } from './render.js'
 import type { CliContext, CommandResult } from './context.js'
 import * as scopes from './commands/scopes.js'
+import * as security from './commands/security.js'
 import * as definitions from './commands/definitions.js'
 import * as inspect from './commands/inspect.js'
 import * as bundles from './commands/bundles.js'
@@ -28,6 +29,10 @@ Usage
   factory bundle import <file>            bring one in
 
   factory run <workflow>                  run it here, now, in the foreground
+  factory stop --all                      stop every agent, and cancel its task
+
+  factory accept [--show]                 what an agent run can reach, and agree
+  factory profile [default|full-access]   how much authority a new project gets
 
   factory task list                       what the daemon is working on
   factory task show <id>                  one task, its runs and what it can do
@@ -158,6 +163,25 @@ async function dispatch(
   })
 
   switch (command) {
+    case 'accept': {
+      const show = rest.includes('--show')
+      return security.accept(context, show ? { show } : {}, style)
+    }
+
+    case 'profile': {
+      const [wanted] = rest
+      return security.profile(context, wanted, style)
+    }
+
+    case 'stop': {
+      // `--all` required rather than assumed: "stop" alone reads as though it
+      // might mean one thing, and the one thing it means is everything.
+      if (!rest.includes('--all')) {
+        return usage('Try "factory stop --all" — it stops every agent Factory started.')
+      }
+      return security.stop(daemon ?? createDaemonClient(context.env), style)
+    }
+
     case 'init': {
       const index = rest.indexOf('--scope')
       const scope = index === -1 ? undefined : (rest[index + 1] as ScopeKind | undefined)

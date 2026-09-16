@@ -11,6 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DISCLAIMER_VERSION } from '@factory/core'
 import { run } from '../src/main.js'
 import type { CommandResult } from '../src/context.js'
 import { DaemonError, type DaemonClient } from '../src/daemon.js'
@@ -134,6 +135,14 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       mkdirSync(join(workDir, 'src'), { recursive: true })
       mkdirSync(userScope, { recursive: true })
       file(join(userScope, 'config.yaml'), 'kind: factory.scope/v1\nscope: user\n')
+      // The disclaimer, accepted. `factory run` refuses without it, for the
+      // same reason the daemon refuses to queue — so every scenario about
+      // something else needs an installation where somebody said yes. The
+      // scenarios about accepting it delete this first.
+      file(
+        join(userScope, 'settings.json'),
+        JSON.stringify({ security: { acceptedVersion: DISCLAIMER_VERSION } }),
+      )
 
       mkdirSync(projectScope, { recursive: true })
       file(join(projectScope, 'config.yaml'), 'kind: factory.scope/v1\nscope: project\n')
@@ -691,6 +700,153 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
         invoke('plugins wiggle @factory/task-diffity'),
       )
       Then('it is a usage error', () => expect(result.exitCode).toBe(2))
+    })
+  })
+
+  Rule('the terminal can accept the disclaimer, read the profile, and stop everything', ({
+    RuleScenario,
+  }) => {
+    const unaccepted = (): void => {
+      // The Background accepts it for every other scenario, so these remove it.
+      // Safe here, unlike with a running daemon: the CLI builds its context per
+      // invocation, so it reads the file each time.
+      rmSync(join(userScope, 'settings.json'), { force: true })
+    }
+    const stoppedGroups = (signalled: number, killed: number, stopped: string[]) => (): void => {
+      daemon = fakeDaemon((path, method) =>
+        path === '/api/runs/stop' && method === 'POST'
+          ? { stopped, signalled, killed }
+          : new DaemonError(404, `unexpected ${method} ${path}`),
+      )
+    }
+    const accepted = (): number | undefined =>
+      (
+        JSON.parse(readFileSync(join(userScope, 'settings.json'), 'utf8')) as {
+          security?: { acceptedVersion?: number }
+        }
+      ).security?.acceptedVersion
+
+    RuleScenario('The disclaimer can be read without agreeing to it', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('nothing has been accepted', unaccepted)
+      When('I run "accept --show"', () => invoke('accept --show'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says what an agent can do inside the workspace', () =>
+        expect(output).toContain('inside the workspace'),
+      )
+      And('the output names the profile that removes the boundaries', () =>
+        expect(output).toContain('Full Access'),
+      )
+      And('the output says it has not been accepted', () =>
+        expect(output).toContain('Not accepted'),
+      )
+      And('nothing was recorded', () =>
+        expect(existsSync(join(userScope, 'settings.json'))).toBe(false),
+      )
+    })
+
+    RuleScenario('Accepting it records the current version', ({ Given, When, Then, And }) => {
+      Given('nothing has been accepted', unaccepted)
+      When('I run "accept"', () => invoke('accept'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says Factory will not ask again', () =>
+        expect(output).toContain('will not ask again'),
+      )
+      And('the settings file records the accepted version', () =>
+        expect(accepted()).toBe(DISCLAIMER_VERSION),
+      )
+    })
+
+    RuleScenario('Accepting it twice says so and changes nothing', ({
+      Given,
+      And,
+      When,
+      Then,
+    }) => {
+      Given('nothing has been accepted', unaccepted)
+      And('I have run "accept"', () => invoke('accept'))
+      When('I run "accept"', () => invoke('accept'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says it was already accepted', () =>
+        expect(output).toContain('Already accepted'),
+      )
+    })
+
+    RuleScenario('Running a workflow before accepting is refused', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('nothing has been accepted', unaccepted)
+      When('I run "run hello-world --yes"', () => invoke('run hello-world --yes'))
+      Then('it fails', () => expect(result.exitCode).not.toBe(0))
+      And('the output says how to accept it', () => expect(output).toContain('factory accept'))
+    })
+
+    RuleScenario('A dry run needs no acceptance', ({ Given, When, Then }) => {
+      Given('nothing has been accepted', unaccepted)
+      When('I run "run hello-world --dry-run"', () => invoke('run hello-world --dry-run'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+    })
+
+    RuleScenario('The installation profile can be read', ({ When, Then, And }) => {
+      When('I run "profile"', () => invoke('profile'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says the profile is "Default"', () => expect(output).toContain('Default'))
+    })
+
+    RuleScenario('The installation profile can be changed', ({ When, Then, And }) => {
+      When('I run "profile full-access"', () => invoke('profile full-access'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says the profile is "Full Access"', () =>
+        expect(output).toContain('Full Access'),
+      )
+      And('the output warns about what Full Access removes', () =>
+        expect(output).toContain('workspace boundary'),
+      )
+    })
+
+    RuleScenario('A profile that is not one is refused', ({ When, Then, And }) => {
+      When('I run "profile sort-of-safe"', () => invoke('profile sort-of-safe'))
+      Then('it fails', () => expect(result.exitCode).not.toBe(0))
+      And('the output names the profiles', () => expect(output).toContain('full-access'))
+    })
+
+    RuleScenario('Stopping needs to be asked for plainly', ({ When, Then, And }) => {
+      When('I run "stop"', () => invoke('stop'))
+      Then('the exit code is 2', () => expect(result.exitCode).toBe(2))
+      And('the output mentions "--all"', () => expect(output).toContain('--all'))
+    })
+
+    RuleScenario('Stopping everything reports what it stopped', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given(
+        'the daemon says two process groups were stopped',
+        stoppedGroups(2, 1, ['task-1', 'task-2']),
+      )
+      When('I run "stop --all"', () => invoke('stop --all'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says 2 process groups were stopped', () =>
+        expect(output).toContain('Stopped 2 process groups'),
+      )
+    })
+
+    RuleScenario('Stopping when nothing runs says so', ({ Given, When, Then, And }) => {
+      Given('the daemon says nothing was running', stoppedGroups(0, 0, []))
+      When('I run "stop --all"', () => invoke('stop --all'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says nothing was running', () =>
+        expect(output).toContain('Nothing was running'),
+      )
     })
   })
 })
