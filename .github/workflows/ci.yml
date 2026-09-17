@@ -4,6 +4,14 @@ on:
   push: { branches: [main] }
   pull_request:
 
+# One run per branch. Five commits pushed in five minutes used to leave five
+# full runs competing for runners, each paying for a browser job whose answer
+# the next commit had already superseded — and on a private repository those
+# are billed minutes. The tip is what anybody reads a tick for.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   community-standalone:
     # The open-core boundary, enforced by the repository itself.
