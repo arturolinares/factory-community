@@ -112,10 +112,20 @@ Undo it with `pnpm --filter @factory/cli unlink --global`.
 | | |
 |---|---|
 | `~/.xaedalon/.factory/` | the user scope: `config.yaml`, `workflows/`, `phases/`, `agents/` |
-| `~/.factory/state/factory.db` | tasks, runs, logs and evidence |
+| `~/.xaedalon/.factory/state/factory.db` | tasks, runs, logs and evidence — inside the scope, not beside it |
 | `<repo>/.xaedalon/.factory/` | a project's own definitions, committed with the repository |
 | `FACTORY_HOME` | overrides the user scope — what the test suites use, and what a second installation on one machine would use |
 | `FACTORY_PORT`, `FACTORY_WEB_PORT` | the daemon's port and the dev server's; both default to loopback only |
+
+**Everything Factory writes lives under `.xaedalon/`** — the user scope in your home directory, a
+project scope in a repository, and the database inside whichever scope is in force. There is no
+second location.
+
+An installation made before that directory was named will have `~/.factory` instead. It keeps
+working: the resolver prefers `~/.xaedalon/.factory` and falls back to the old path when only that
+exists, database and all. `factory doctor` reports it as a warning and names the command —
+`mv ~/.factory ~/.xaedalon/.factory` with nothing running — after which nothing reads the old path
+again. A project scope moves the same way with `git mv`.
 
 Nothing listens on anything but `127.0.0.1`, deliberately. A tool that runs coding agents against
 your repositories has no business being reachable from the network.

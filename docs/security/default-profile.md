@@ -68,7 +68,7 @@ that project under [Full Access](full-access.md).
 ## Where the setting lives
 
 ```
-~/.factory/settings.json        security.profile, and what you accepted
+~/.xaedalon/.factory/settings.json   security.profile, and what you accepted
 ```
 
 A project overrides the installation's choice, and a project that has never
