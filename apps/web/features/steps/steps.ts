@@ -1799,6 +1799,29 @@ When('I mark it done', async ({ page }) => {
   await page.getByTestId('action-mark_done').click()
 })
 
+Then('the board says {string}', async ({ page }, sentence: string) => {
+  // Generous, because Stop all answers only once the process trees are gone:
+  // SIGTERM, then up to three seconds of grace per run, then SIGKILL.
+  await expect(page.getByTestId('batch-report')).toContainText(sentence, { timeout: 15_000 })
+})
+
+Then(
+  'it says {string} was left alone because nothing in its plan is ticked',
+  async ({ page }, name: string) => {
+    await expect(page.getByTestId('batch-skipped')).toContainText(
+      `${name} (nothing in its plan is ticked)`,
+    )
+  },
+)
+
+When('I dismiss the report', async ({ page }) => {
+  await page.getByTestId('dismiss-batch-report').click()
+})
+
+Then('the board says nothing about a batch', async ({ page }) => {
+  await expect(page.getByTestId('batch-report')).toHaveCount(0)
+})
+
 Then('the row for {string} says nothing about waiting', async ({ page }, name: string) => {
   await expect(page.getByTestId(`waiting-${name}`)).toHaveCount(0)
 })

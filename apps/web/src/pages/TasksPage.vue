@@ -20,8 +20,29 @@ import type { TaskListItem, TaskState } from '../api/client.js'
  */
 const store = useTasks()
 const projects = useProjects()
-const { visible, summary, loading, error, filters, view, acting, batching, workflows } =
+const { visible, summary, loading, error, filters, view, acting, batching, batch, workflows } =
   storeToRefs(store)
+
+/**
+ * What the last whole-project action did, in one sentence.
+ *
+ * A batch can legitimately do nothing — every draft in the project may have an
+ * empty plan — and the first time Queue all was used against a real project it
+ * did exactly that, silently: the daemon said which four tasks it had left and
+ * why, and this page threw the answer away. A button that answers silence is a
+ * button that looks broken.
+ */
+const batchSummary = computed(() => {
+  const report = batch.value
+  if (report === undefined) return undefined
+  const noun = report.count === 1 ? 'task' : 'tasks'
+  if (report.count > 0) {
+    return report.action === 'queued'
+      ? `Queued ${report.count} ${noun}.`
+      : `Stopped ${report.count} ${noun}.`
+  }
+  return report.action === 'queued' ? 'Nothing was queued.' : 'Nothing was running.'
+})
 
 /**
  * The header says which board this is.
@@ -210,6 +231,37 @@ onUnmounted(() => store.disconnect())
     >
       {{ error }}
     </p>
+
+    <!-- Says what a whole-project action did, including when it did nothing.
+         Dismissible rather than timed: it lists task names, and a message
+         somebody is reading must not vanish while they read it. -->
+    <div
+      v-if="batchSummary"
+      class="mb-4 flex items-start gap-3 rounded-lg border border-[var(--color-line)] bg-[var(--color-raised)] px-4 py-3 text-sm"
+      data-testid="batch-report"
+    >
+      <div class="min-w-0 flex-1">
+        <p>{{ batchSummary }}</p>
+        <p
+          v-if="batch && batch.skipped.length > 0"
+          class="mt-1 text-xs text-[var(--color-ink-muted)]"
+          data-testid="batch-skipped"
+        >
+          <!-- The names, not just the count: "4 were skipped" sends somebody
+               hunting through the board for which four. -->
+          Left alone —
+          {{ batch.skipped.map((entry) => `${entry.name} (${entry.reason})`).join(', ') }}
+        </p>
+      </div>
+      <button
+        type="button"
+        class="shrink-0 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        data-testid="dismiss-batch-report"
+        @click="store.dismissBatch()"
+      >
+        Dismiss
+      </button>
+    </div>
 
     <p v-if="loading && visible.length === 0" class="text-sm text-[var(--color-ink-muted)]" data-testid="loading">
       Loading…

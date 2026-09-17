@@ -19,7 +19,7 @@ This document is the source of truth, written as the project is built.
 point a task at a repository, queue it, and the daemon gives it a worktree, runs the agents, keeps
 what they printed and what they produced, stops at the gate you asked for, and continues when you
 approve. From a terminal, from the board, or from Pro's desktop app — the same API either way.
-**5,449 Gherkin steps green below the browser** across 50 feature files and 1,107 scenarios, 150 of
+**5,449 Gherkin steps green below the browser** across 50 feature files and 1,112 scenarios, 155 of
 them in a real browser, and smoke runs against the real agent CLIs.
 
 Since increment 17 an agent is also **confined to the workspace it was given**, handed an
@@ -698,6 +698,15 @@ Decisions, taken because each had a defensible alternative:
   pass the store's own refusal through as a 400. `GET /api/tasks` and
   `GET /api/tasks/:id` gain `blockers: [{ id, name, status }]`, derived per
   request the way `progress` is; `Task` gains `dependsOn: string[]`.
+
+**The first real use found what 150 browser scenarios did not.** Queue all,
+pressed against the actual `todolist`, queued nothing and said nothing: Tasks 7
+to 10 have empty plans, the daemon reported all four in `skipped` with a reason
+each, and the board threw that answer away. Every scenario had at least one
+queueable task, so the report was always redundant with the rows changing state
+— and the case worth specifying was the one where the button correctly does
+nothing. The board now says what a batch did, names what it left alone, and has
+five scenarios and five mutations on it.
 
 **Three mutations survived their first round**, and each one taught something the
 scenarios were missing. The self-dependency refusal survived because the ring

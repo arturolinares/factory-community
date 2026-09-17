@@ -819,6 +819,56 @@ Feature: The task board
       # The buttons are project-level because the graph is.
       Then "Loose" is still "draft"
 
+    Scenario: Queue all says how many it queued
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      And the task "Two" exists in "work" on "hello"
+      When I open the tasks page
+      And I choose the project "work"
+      And I queue the whole project
+      Then the board says "Queued 2 tasks."
+
+    Scenario: Queue all says what it left alone, and why
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      And the task "Unplanned" exists in "work" with no workflow
+      When I open the tasks page
+      And I choose the project "work"
+      And I queue the whole project
+      Then the board says "Queued 1 task."
+      # The names, not a count: "1 was skipped" sends somebody hunting through
+      # the board for which one.
+      And it says "Unplanned" was left alone because nothing in its plan is ticked
+
+    Scenario: Queue all with nothing to queue says so rather than nothing
+      Given the project "work" is registered
+      And the task "Unplanned" exists in "work" with no workflow
+      When I open the tasks page
+      And I choose the project "work"
+      And I queue the whole project
+      # The first use of this button against a real project queued nothing,
+      # because every draft in it had an empty plan, and the board said
+      # nothing at all. A button that answers silence looks broken.
+      Then the board says "Nothing was queued."
+      And it says "Unplanned" was left alone because nothing in its plan is ticked
+
+    Scenario: The report can be dismissed
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      When I open the tasks page
+      And I choose the project "work"
+      And I queue the whole project
+      And I dismiss the report
+      Then the board says nothing about a batch
+
+    Scenario: Stop all says when there was nothing to stop
+      Given the project "work" is registered
+      And the task "One" exists in "work" on "hello"
+      When I open the tasks page
+      And I choose the project "work"
+      And I stop the whole project
+      Then the board says "Nothing was running."
+
     Scenario: Stopping everything asks first
       Given the project "work" is registered
       And the task "One" exists in "work" on "hello"
@@ -839,7 +889,8 @@ Feature: The task board
       And I queue the whole project
       And "One" is running
       And I stop the whole project
-      Then "One" is "cancelled"
+      Then the board says "Stopped 2 tasks."
+      And "One" is "cancelled"
       And "Two" is "cancelled"
       # The clause worth watching: cancelling wakes the scheduler, so a stop
       # that only killed processes would start the next task within a tick.

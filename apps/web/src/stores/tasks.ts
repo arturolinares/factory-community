@@ -13,6 +13,14 @@ import {
 import { live, type LiveConnection } from '../api/live.js'
 import { useProjects } from './projects.js'
 
+/** What a whole-project action did, in the words the board shows. */
+export interface BatchReport {
+  readonly action: 'queued' | 'stopped'
+  readonly count: number
+  /** Tasks the daemon left alone, and why each one. */
+  readonly skipped: readonly { readonly name: string; readonly reason: string }[]
+}
+
 /**
  * The board's state.
  *
@@ -33,6 +41,15 @@ export const useTasks = defineStore('tasks', () => {
   const acting = ref<string | undefined>(undefined)
   /** A whole-project action in flight. Separate from `acting`, which is an id. */
   const batching = ref(false)
+  /**
+   * What the last whole-project action did.
+   *
+   * Kept because a batch can legitimately do **nothing** — every draft in the
+   * project may have an empty plan — and a button that answers silence is a
+   * button that looks broken. The daemon says which tasks it left and why; this
+   * is where that answer is held so the board can draw it.
+   */
+  const batch = ref<BatchReport | undefined>(undefined)
 
   const filters = reactive({
     query: '',
@@ -126,20 +143,23 @@ export const useTasks = defineStore('tasks', () => {
     if (projectId === undefined) return
     batching.value = true
     error.value = undefined
-    try {
-      await api.queueProject(projectId)
+    batch.value = undefined
+    // Named so the retry after an acceptance is the same call, not a copy of it.
+    const queue = async (): Promise<void> => {
+      const result = await api.queueProject(projectId)
+      batch.value = {
+        action: 'queued',
+        count: result.queued.length,
+        skipped: result.skipped.map((entry) => ({ name: entry.task.name, reason: entry.reason })),
+      }
       await load()
+    }
+    try {
+      await queue()
     } catch (caught) {
       // The same answer a single queue gives, for the same reason: a refusal
       // for want of an acceptance is the panel, not a red line.
-      if (
-        useSettings().handledRefusal(caught, async () => {
-          await api.queueProject(projectId)
-          await load()
-        })
-      ) {
-        return
-      }
+      if (useSettings().handledRefusal(caught, queue)) return
       error.value = caught instanceof ApiError ? caught.message : String(caught)
     } finally {
       batching.value = false
@@ -152,8 +172,10 @@ export const useTasks = defineStore('tasks', () => {
     if (projectId === undefined) return
     batching.value = true
     error.value = undefined
+    batch.value = undefined
     try {
-      await api.stopProject(projectId)
+      const result = await api.stopProject(projectId)
+      batch.value = { action: 'stopped', count: result.cancelled.length, skipped: [] }
       await load()
     } catch (caught) {
       error.value = caught instanceof ApiError ? caught.message : String(caught)
@@ -263,6 +285,7 @@ export const useTasks = defineStore('tasks', () => {
     error,
     acting,
     batching,
+    batch,
     filters,
     view,
     inProject,
@@ -278,5 +301,8 @@ export const useTasks = defineStore('tasks', () => {
     create,
     queueProject,
     stopProject,
+    dismissBatch: () => {
+      batch.value = undefined
+    },
   }
 })

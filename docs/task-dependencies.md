@@ -71,7 +71,10 @@ Both are on the board's header, and only when a project is chosen — the graph 
 and there is no sensible meaning for "queue every task in every repository".
 
 **Queue all** queues every `draft` and `blocked` task in the project, in dependency order, so the
-queue reads in the order the work will happen. The queue is a priority rather than a barrier, so
+queue reads in the order the work will happen. It says how many it queued and — by name — which
+tasks it left alone and why, because a project whose drafts all have empty plans queues nothing at
+all, and a button that answers silence looks broken. **Assign workflows first:** a task with nothing
+ticked in its plan has nothing to run, so Queue all skips it. The queue is a priority rather than a barrier, so
 this is not what holds the dependents back — the scheduler does that — it is so the board is
 readable. Tasks with nothing ticked in their plan are listed as skipped rather than failing the
 batch. Finished and cancelled tasks are left alone: one click must never set five agents on work
