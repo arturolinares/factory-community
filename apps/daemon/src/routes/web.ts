@@ -29,6 +29,47 @@ const TYPES: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
 }
 
+/**
+ * What `/` says when the board was never built.
+ *
+ * Registered in place of the static routes, because the alternative is what a
+ * newcomer used to get: Fastify's own `{"message":"Route GET:/ not found"}`,
+ * from a daemon that had already printed the answer to its log where nobody
+ * was looking. The build is missing, not broken — the API is useful on its own
+ * — so this is a page with the command on it, not an error.
+ *
+ * 200 rather than 404 or 503: the only visitor to `/` on a daemon without a
+ * board is a person who followed the README, and a status code they will never
+ * see matters less than the sentence they will.
+ */
+export function registerMissingBoardRoute(app: FastifyInstance): void {
+  app.get('/*', async (request, reply) => {
+    const url = (request.params as { '*'?: string })['*'] ?? ''
+    // A machine asking for an asset gets an honest 404; only a page request
+    // gets the explanation.
+    if (extname(url) !== '') return reply.code(404).send({ error: 'Not found.' })
+    return reply
+      .code(200)
+      .type('text/html; charset=utf-8')
+      .send(
+        [
+          '<!doctype html><meta charset="utf-8"><title>Factory — the board is not built</title>',
+          '<style>body{font:15px/1.6 ui-sans-serif,system-ui,sans-serif;max-width:46rem;',
+          'margin:12vh auto;padding:0 1.5rem;color:#e7e7e7;background:#0b0b0b}',
+          'code{background:#1b1b1b;padding:.15rem .4rem;border-radius:.25rem}',
+          'a{color:#7dd3fc}</style>',
+          '<h1>The board is not built</h1>',
+          '<p>The daemon is running and its API is live — this process just has no',
+          'web bundle to serve. Build it:</p>',
+          '<pre><code>pnpm build</code></pre>',
+          '<p>That builds the board as well as the engine. To build only the board:',
+          '<code>pnpm --filter @factory/web build</code>. Then reload this page.</p>',
+          '<p>Meanwhile the API answers: <a href="/api/health">/api/health</a>.</p>',
+        ].join('\n'),
+      )
+  })
+}
+
 export function registerWebRoutes(app: FastifyInstance, root: string): void {
   const base = resolve(root)
 

@@ -169,6 +169,21 @@ Feature: The definitions API
     When I GET "/api/health"
     Then the response is 200
 
+  Scenario: Without a built board the root page says how to build it
+    When I GET "/"
+    # What a newcomer used to get here was Fastify's own
+    # {"message":"Route GET:/ not found"} — from a daemon that had already
+    # printed the answer to a log nobody was looking at.
+    Then the response is 200
+    And the page says the board is not built
+    And the page names the command that builds it
+
+  Scenario: Without a built board an asset request is still a plain 404
+    When I GET "/assets/index-abc123.js"
+    # A machine asking for a file gets an honest answer; only a page request
+    # gets the explanation.
+    Then the response is 404
+
 
   Rule: plugins can be listed and switched
 

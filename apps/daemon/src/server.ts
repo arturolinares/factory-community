@@ -8,7 +8,7 @@ import { registerInstallationRoutes } from './routes/installation.js'
 import { registerTaskRoutes } from './routes/tasks.js'
 import { registerProjectRoutes } from './routes/projects.js'
 import { registerEventRoutes } from './routes/events.js'
-import { registerWebRoutes } from './routes/web.js'
+import { registerMissingBoardRoute, registerWebRoutes } from './routes/web.js'
 import type { Service } from './service.js'
 import { createChains } from './chains.js'
 
@@ -71,8 +71,9 @@ export function buildServer(
     registerProjectRoutes(app, service, runtime)
   }
 
-  // Last, so it never shadows an API route: its catch-all matches everything.
+  // Last, so neither catch-all ever shadows an API route.
   if (options.webRoot !== undefined) registerWebRoutes(app, options.webRoot)
+  else registerMissingBoardRoute(app)
 
   return app
 }

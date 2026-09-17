@@ -19,6 +19,37 @@ jobs:
     #
     # `scripts/verify-standalone.sh` is the version to run on a working tree
     # that does have factory-pro/ beside it.
+    #
+    # Both supported platforms run, because a platform claim is a guarantee and
+    # this project does not keep guarantees nobody has watched fail. Windows is
+    # absent on purpose: steps run through `bash -c` and work is stopped by
+    # signalling a process group, so the honest answer there is WSL2 (see
+    # docs/install.md) rather than a job that would go green by not exercising
+    # either mechanism.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        # 24 is the floor `engines` states, because the store imports
+        # `node:sqlite` — absent before 22.5 and only settled in 24.
+        with: { node-version: '24' }
+      - run: corepack enable pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  # What a newcomer actually does, run as a job so it cannot quietly rot: clone,
+  # install, build, start the daemon, ask it for a page. The first public
+  # version of this project shipped a `pnpm build` that did not build the board,
+  # and the README promised one served from the same process — a five-minute
+  # failure that every test in the suite passed straight over, because no test
+  # ran the documented commands in order.
+  first-run:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +57,21 @@ jobs:
         with: { node-version: '24' }
       - run: corepack enable pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm test
+      - run: pnpm build
+      - name: the build produces the board as well as the engine
+        run: test -f apps/web/dist/index.html
+      - name: a user scope can be created
+        run: node apps/cli/dist/bin.js init --scope user
+        env: { FACTORY_HOME: ${{ runner.temp }}/.xaedalon/.factory }
+      - name: the daemon serves the board it just built
+        env:
+          FACTORY_HOME: ${{ runner.temp }}/.xaedalon/.factory
+          FACTORY_PORT: '7317'
+        run: |
+          node apps/daemon/dist/bin.js &
+          for _ in $(seq 1 40); do
+            curl -sf http://127.0.0.1:7317/api/health >/dev/null && break
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:7317/api/health | grep -q '"ok":true'
+          curl -sf http://127.0.0.1:7317/ | grep -q 'id="app"'

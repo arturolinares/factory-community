@@ -4,15 +4,19 @@ Ten minutes, from nothing to an agent doing work you approved.
 
 ## 1. Build and start
 
+Node 24 or newer, pnpm (`corepack enable pnpm`), git. macOS or Linux — on Windows, work inside
+WSL2; see [`install.md`](install.md).
+
 ```bash
 pnpm install
-pnpm build
-node apps/cli/dist/bin.js init        # creates ~/.xaedalon/.factory
-node apps/daemon/dist/bin.js          # serves 127.0.0.1:7317
+pnpm build                                      # engine, CLI and board
+node apps/cli/dist/bin.js init --scope user     # ~/.xaedalon/.factory
+node apps/daemon/dist/bin.js                    # serves 127.0.0.1:7317
 ```
 
-`init` writes a user scope: `~/.xaedalon/.factory/config.yaml`, plus empty `workflows/` and `phases/`
-directories. The daemon opens `~/.xaedalon/.factory/state/factory.db`, corrects anything a previous stop left
+`--scope user` writes `~/.xaedalon/.factory/config.yaml`, plus empty `workflows/` and `phases/`
+directories. Without the flag, `init` inside a git repository writes a *project* scope in that
+repository — right for a repository's own workflows, wrong for a first run. The daemon opens `~/.xaedalon/.factory/state/factory.db`, corrects anything a previous stop left
 half-done, and starts the scheduler.
 
 Check what is still missing before going further:

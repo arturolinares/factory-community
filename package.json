@@ -5,14 +5,14 @@
   "type": "module",
   "packageManager": "pnpm@12.3.4",
   "engines": {
-    "node": ">=20.11"
+    "node": ">=24"
   },
   "scripts": {
     "typecheck": "tsc --build --force && tsc -p tsconfig.spec.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . --max-warnings 0",
-    "build": "tsc --build",
+    "build": "tsc --build && pnpm --filter @factory/web build",
     "verify:standalone": "bash scripts/verify-standalone.sh",
     "test:e2e": "pnpm --filter @factory/web test:e2e",
     "dev": "pnpm --filter @factory/web dev"

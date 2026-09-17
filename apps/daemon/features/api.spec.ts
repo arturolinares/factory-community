@@ -453,6 +453,26 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
     Then('the response is 200', () => expect(response.statusCode).toBe(200))
   })
 
+  Scenario('Without a built board the root page says how to build it', ({
+    When,
+    Then,
+    And,
+  }) => {
+    When('I GET "/"', () => call('GET', '/'))
+    Then('the response is 200', () => expect(response.statusCode).toBe(200))
+    And('the page says the board is not built', () =>
+      expect(rawResponse).toContain('The board is not built'),
+    )
+    And('the page names the command that builds it', () =>
+      expect(rawResponse).toContain('pnpm build'),
+    )
+  })
+
+  Scenario('Without a built board an asset request is still a plain 404', ({ When, Then }) => {
+    When('I GET "/assets/index-abc123.js"', () => call('GET', '/assets/index-abc123.js'))
+    Then('the response is 404', () => expect(response.statusCode).toBe(404))
+  })
+
   interface PluginEntry {
     id: string
     name?: string

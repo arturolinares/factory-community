@@ -12,10 +12,19 @@ served from the same process. Nothing leaves the machine unless a step you wrote
 
 ```bash
 pnpm install
-pnpm build
-node apps/cli/dist/bin.js init          # create ~/.xaedalon/.factory
-node apps/daemon/dist/bin.js            # http://127.0.0.1:7317
+pnpm build                                        # engine, CLI and board
+node apps/cli/dist/bin.js init --scope user       # ~/.xaedalon/.factory
+node apps/daemon/dist/bin.js                      # http://127.0.0.1:7317
 ```
+
+**Requirements:** Node **24 or newer** (the store uses `node:sqlite`), pnpm via
+`corepack enable pnpm`, and git. **macOS and Linux** are supported and tested; on Windows use
+**WSL2** — steps run through `bash` and work is stopped by signalling process groups, neither of
+which Windows provides. See [`docs/install.md`](docs/install.md).
+
+Without `--scope user`, `init` inside a git repository creates a *project* scope in that
+repository instead — which is what you want for a repository's own workflows, and not what you
+want on your first run.
 
 Then open the board, add the repository you want to work in, and give a task a workflow — or stay
 in the terminal:
