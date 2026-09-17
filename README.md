@@ -19,6 +19,11 @@ node apps/cli/dist/bin.js init --scope user       # ~/.xaedalon/.factory
 node apps/daemon/dist/bin.js                      # http://127.0.0.1:7317
 ```
 
+Or ask a coding agent to do it: Factory ships a setup runbook they can follow —
+`/factory-setup` in Claude Code, or "set up Factory" in Copilot or Codex. It explains itself before
+it starts, and stops short of the two decisions that are yours. See
+[`docs/install.md`](docs/install.md).
+
 **Requirements:** Node **24 or newer** (the store uses `node:sqlite`), pnpm via
 `corepack enable pnpm`, and git. **macOS and Linux** are supported and tested; on Windows use
 **WSL2** — steps run through `bash` and work is stopped by signalling process groups, neither of

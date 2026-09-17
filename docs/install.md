@@ -28,6 +28,41 @@ Windows support means replacing both mechanisms rather than patching around them
 pretended at until it is measured. See [`../PROJECT.md`](../PROJECT.md) for how this project treats
 claims it has not watched fail.
 
+## Or let your coding agent do it
+
+Factory ships a runbook its own kind can follow:
+[`skills/factory-setup/SKILL.md`](../skills/factory-setup/SKILL.md). It explains the whole plan
+before touching anything, checks the prerequisites, builds, creates your scope, starts the daemon
+and proves the board answers — and it deliberately stops short of accepting the security notice or
+running anything, because both are yours to decide.
+
+**If you already have this repository**, open your agent in it and ask:
+
+| | |
+|---|---|
+| Claude Code | `/factory-setup`, or just "set up Factory" |
+| GitHub Copilot | "set up Factory" — `.github/copilot-instructions.md` points at the runbook |
+| Codex | "set up Factory" — `AGENTS.md` points at the same file |
+
+**If you do not**, give your agent the one file first, then ask it in any directory:
+
+```bash
+# Claude Code
+mkdir -p ~/.claude/skills/factory-setup && curl -fsSL \
+  https://raw.githubusercontent.com/xaedalon/factory-community/main/skills/factory-setup/SKILL.md \
+  -o ~/.claude/skills/factory-setup/SKILL.md
+
+# Codex
+mkdir -p ~/.codex/prompts && curl -fsSL \
+  https://raw.githubusercontent.com/xaedalon/factory-community/main/skills/factory-setup/SKILL.md \
+  -o ~/.codex/prompts/factory-setup.md
+```
+
+One file, three agents, and no second copy of the steps: the per-agent files in this repository are
+pointers to that runbook rather than duplicates of it, so a fix to the install path is a fix
+everywhere. Read it before you run it — it is a page and a half, and it is the same sequence the
+rest of this document gives by hand.
+
 ## Install
 
 ```bash
