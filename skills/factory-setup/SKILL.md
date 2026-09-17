@@ -130,21 +130,39 @@ node apps/cli/dist/bin.js init --scope user
 in that repository — right for a repository's own workflows, wrong for a first run, because their
 definitions would then live inside a checkout they will later pull or delete.
 
-This writes `~/.xaedalon/.factory/` with `config.yaml`, `workflows/` and `phases/`.
+This writes `config.yaml`, `workflows/` and `phases/` into their user scope. **Report the path it
+prints rather than assuming one**, and if you need it later, ask:
+
+```bash
+node apps/cli/dist/bin.js config path
+```
+
+Usually that is `~/.xaedalon/.factory`. It is `~/.factory` on a machine that was set up before the
+directory was renamed and never migrated: the resolver prefers `~/.xaedalon/.factory`, falls back to
+`~/.factory` when only that exists, and an explicit `FACTORY_HOME` beats both
+(`packages/config/src/scopes.ts`). Somebody with an older installation who is told their definitions
+are in the new place will think they have lost them.
 
 ## 6. Start the daemon and prove it answers
 
 Start it detached, so it survives the shell you started it in:
 
 ```bash
-mkdir -p ~/.factory
-node apps/daemon/dist/bin.js > ~/.factory/daemon.log 2>&1 &
+mkdir -p logs
+node apps/daemon/dist/bin.js > logs/daemon.log 2>&1 &
+echo $! > logs/daemon.pid
 ```
 
-The `mkdir` is load-bearing on a machine that has never run Factory: the daemon creates `~/.factory`
-itself, but the shell's redirect happens first, so without it the command fails with *No such file
-or directory* and no daemon starts. Verified by running this sequence against an empty home
-directory — it failed exactly there.
+Inside the checkout, which is already git-ignored — **not** `~/.factory`. That path is not a
+scratch directory: on an installation set up before the scope directory was renamed it is the
+user's *live scope*, holding their `config.yaml`, `settings.json` and history, and writing a log
+into it is at best untidy. On a machine with neither directory, creating it would leave something
+that looks like a legacy scope for the resolver to find later.
+
+The `mkdir` is still load-bearing: the shell's redirect happens before anything else, so a missing
+directory fails the command and starts no daemon. Both of these were found by running this runbook
+for real — the first against an empty home, the second by an agent that read the fallback in
+`scopes.ts` and refused to write where it was told to.
 
 On Windows-in-WSL, the same command inside the WSL shell. If they would rather run it in the
 foreground in their own terminal, say so and let them — then skip to the checks below once it is up.
@@ -158,7 +176,7 @@ curl -sf http://127.0.0.1:7317/ | head -c 40  # the board's HTML
 
 - **Health answers, `/` returns a page saying the board is not built** → the build skipped the web
   bundle. `pnpm --filter @factory/web build`, then reload.
-- **Nothing answers on 7317** → read `~/.factory/daemon.log`. If the port is taken by something
+- **Nothing answers on 7317** → read `logs/daemon.log`. If the port is taken by something
   else, start it on another with `FACTORY_PORT=7417` and use that port everywhere afterwards.
 - **`EADDRINUSE` and the log says a Factory is already listening** → they already have one running.
   Say so; do not start a second.
@@ -187,8 +205,8 @@ Offer it; do not do it unasked, since it writes into their global pnpm directory
 Report, briefly and concretely:
 
 - **the board**: `http://127.0.0.1:7317`
-- **where things are**: the checkout, `~/.xaedalon/.factory/` for definitions,
-  `~/.factory/state/factory.db` for what happened
+- **where things are**: the checkout, the scope path `config path` printed for definitions, and
+  `<that scope>/state/factory.db` for what happened — both read back rather than assumed
 - **how to stop it**: `factory stop --all` stops every agent and cancels its task; killing the
   daemon process stops the daemon
 - **what is theirs to do next**, in this order:
