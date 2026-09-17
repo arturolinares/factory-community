@@ -1071,10 +1071,23 @@ When('I add the workflow {string}', async ({ page }, name: string) => {
  * apart that Vue re-renders in between and the bug never shows.
  */
 When('I add {string} and {string} in the same instant', async ({ page }, a: string, b: string) => {
+  // Both buttons have to be on the page before the clicks, and the clicks have
+  // to fail loudly if they are not. `?.click()` on a button that has not
+  // rendered is a step that silently does nothing — which is exactly how this
+  // scenario passed here and failed on CI's slower machine, reporting an empty
+  // list rather than a lost click.
+  await expect(page.getByTestId(`pick-workflow-${a}`)).toBeVisible()
+  await expect(page.getByTestId(`pick-workflow-${b}`)).toBeVisible()
   await page.evaluate(
     ([first, second]) => {
-      document.querySelector<HTMLElement>(`[data-testid="pick-workflow-${first}"]`)?.click()
-      document.querySelector<HTMLElement>(`[data-testid="pick-workflow-${second}"]`)?.click()
+      const one = document.querySelector<HTMLElement>(`[data-testid="pick-workflow-${first}"]`)
+      const two = document.querySelector<HTMLElement>(`[data-testid="pick-workflow-${second}"]`)
+      if (one === null || two === null) {
+        throw new Error(`Both buttons must exist: ${first} ${one === null ? 'missing' : 'ok'}, ${second} ${two === null ? 'missing' : 'ok'}.`)
+      }
+      // One tick, no await between them: that is the whole point.
+      one.click()
+      two.click()
     },
     [a, b],
   )
