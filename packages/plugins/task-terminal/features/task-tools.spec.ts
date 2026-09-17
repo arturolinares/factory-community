@@ -147,7 +147,8 @@ describeFeature(feature, ({ Background, Rule, Scenario, ScenarioOutline, BeforeE
   Rule('a terminal where the work is', ({ RuleScenario }) => {
     RuleScenario('It offers a shell and no command', ({ When, Then, And }) => {
       When('"open-terminal" is asked what it offers', ask('open-terminal'))
-      Then('it offers no command of its own', () => expect(offer?.command).toBeUndefined())
+      Then('it offers something', () => expect(offer).toBeDefined())
+      And('it offers no command of its own', () => expect(offer?.command).toBeUndefined())
       And('it is available', () => expect(offer?.unavailable).toBeUndefined())
     })
 

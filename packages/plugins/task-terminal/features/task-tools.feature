@@ -29,7 +29,12 @@ Feature: The three task tools Factory ships
 
     Scenario: It offers a shell and no command
       When "open-terminal" is asked what it offers
-      Then it offers no command of its own
+      # Asserted before the two absences below, because both of those are true
+      # of a tool that offered nothing at all: `offer?.command` and
+      # `offer?.unavailable` read `undefined` when there is no offer, so
+      # without this the scenario passes for a tool that declined to appear.
+      Then it offers something
+      And it offers no command of its own
       And it is available
 
     Scenario: A task with no project has nowhere to open
