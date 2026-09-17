@@ -397,6 +397,58 @@ export async function depends(
 }
 
 /**
+ * `factory project add <name> <path>` — somewhere to work.
+ *
+ * Exists because `factory setup` had to print a `curl` at a hardcoded port to
+ * answer its own most important step, and a printed port is wrong the moment
+ * anybody runs on another one. The CLI already resolves the daemon from
+ * `FACTORY_URL` or `FACTORY_PORT` in one place; this lets the hint say a
+ * command instead of an address.
+ *
+ * The path is sent as typed. The repository checks it — a path that does not
+ * exist, is not a directory, or is not a git repository comes back as the
+ * sentence it wrote, which is better than a second opinion here.
+ */
+export async function projectAdd(
+  client: DaemonClient,
+  name: string,
+  path: string,
+  options: { inPlace?: boolean },
+  style: Style,
+): Promise<CommandResult> {
+  try {
+    const result = await client.request<{
+      project: ProjectSummary & { path: string; usesWorktrees: boolean }
+      scaffolded?: { written: readonly string[]; kept: readonly string[]; error?: string }
+    }>('/api/projects', {
+      method: 'POST',
+      body: {
+        name,
+        path,
+        ...(options.inPlace === true ? { usesWorktrees: false } : {}),
+      },
+    })
+    const lines = [
+      `${result.project.name} added at ${result.project.path}.`,
+      style.dim(
+        result.project.usesWorktrees
+          ? '  Each task gets a worktree of its own.'
+          : '  Work happens in this checkout, so one task runs at a time.',
+      ),
+    ]
+    // Turning a project setting on copies definitions into the repository. Said
+    // out loud, because it wrote files somebody will find in `git status`.
+    for (const file of result.scaffolded?.written ?? []) lines.push(style.dim(`  wrote ${file}`))
+    if (result.scaffolded?.error !== undefined) {
+      lines.push(style.dim(`  could not scaffold: ${result.scaffolded.error}`))
+    }
+    return ok(lines, result)
+  } catch (error) {
+    return asFailure(error)
+  }
+}
+
+/**
  * `factory project queue|stop <name>` — a whole project at once.
  *
  * The same two routes the board's buttons use, so a terminal and a browser

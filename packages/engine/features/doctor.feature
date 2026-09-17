@@ -77,6 +77,13 @@ Feature: Doctor, for an installation that is running
     Then "a-project" is not done
     And it is marked essential
     And it offers the projects page
+    # And a command for the terminal, which must not name an address. It
+    # printed `curl 127.0.0.1:7317/api/projects` until an agent following the
+    # setup runbook on FACTORY_PORT=7717 was handed a port nothing was
+    # listening on. The CLI resolves the daemon in one place; a hint that
+    # repeats that decision is a second copy of it, and this is the wrong half
+    # of the codebase to keep it in.
+    And its terminal hint is a command, not a port
 
   Scenario: A registered project finishes the step
     Given the project "factory" exists

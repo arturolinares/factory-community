@@ -407,9 +407,12 @@ function projectStep(options: RunningDoctorOptions): SetupStepCapability {
           { label: 'Add one on the Projects page', url: '/projects' },
           {
             label: 'Or from a terminal',
-            command:
-              `curl -sS 127.0.0.1:7317/api/projects -H 'content-type: application/json' ` +
-              `-d '{"name":"my-repo","path":"/full/path/to/repo"}'`,
+            // A command, not an address. This printed `curl 127.0.0.1:7317/…`
+            // until an agent following the setup runbook on `FACTORY_PORT=7717`
+            // was handed a port nothing was listening on. The CLI resolves the
+            // daemon from `FACTORY_URL` or `FACTORY_PORT` in one place, so the
+            // hint should not be a second copy of that decision.
+            command: 'factory project add my-repo /full/path/to/repo',
           },
         ],
       }

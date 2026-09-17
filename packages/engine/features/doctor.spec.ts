@@ -296,6 +296,13 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
     And('it offers the projects page', () =>
       expect(setupItem('a-project')?.actions?.[0]?.url).toBe('/projects'),
     )
+    And('its terminal hint is a command, not a port', () => {
+      const command = setupItem('a-project')?.actions?.[1]?.command ?? ''
+      expect(command).toContain('factory project add')
+      // No host, no port, no curl: anything of that shape is a copy of a
+      // decision the CLI already makes from FACTORY_URL or FACTORY_PORT.
+      expect(command).not.toMatch(/\d{4}|curl|127\.0\.0\.1|localhost|http/)
+    })
   })
 
   Scenario('A registered project finishes the step', ({ Given, When, Then, And }) => {

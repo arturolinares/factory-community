@@ -464,3 +464,38 @@ Feature: The factory command
       When I run "project nonsense work"
       Then the exit code is 2
       And the output mentions "queue"
+
+    Scenario: A repository can be added from the terminal
+      Given a daemon that accepts a project
+      When I run "project add work /repos/work"
+      Then it succeeds
+      And the output says where it was added
+      And the daemon was told the name and the path
+
+    Scenario: A project can be added to work in its own checkout
+      Given a daemon that accepts a project
+      When I run "project add work /repos/work --in-place"
+      Then it succeeds
+      # One task at a time in that repository, which is a fact worth printing
+      # rather than leaving somebody to discover when two tasks collide.
+      And the output says work happens in that checkout
+      And the daemon was told not to use worktrees
+
+    Scenario: What scaffolding wrote is said out loud
+      Given a daemon that accepts a project and scaffolds two files
+      When I run "project add work /repos/work"
+      Then it succeeds
+      # They will find these in `git status`; better to have been told.
+      And the output names both files
+
+    Scenario: A path the repository refuses comes back in its own words
+      Given a daemon that refuses the path
+      When I run "project add work /nowhere"
+      Then it fails
+      And the output says it is not a git repository
+
+    Scenario: Adding a project needs a name and a path
+      When I run "project add work"
+      Then the exit code is 2
+      And the output mentions "<path>"
+

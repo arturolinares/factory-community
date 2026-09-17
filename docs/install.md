@@ -41,12 +41,15 @@ running anything, because both are yours to decide.
 | | |
 |---|---|
 | Claude Code | `/factory-setup`, or just "set up Factory" |
-| GitHub Copilot | "set up Factory" — `.github/copilot-instructions.md` points at the runbook |
+| GitHub Copilot | "set up Factory" — the CLI discovers the same skill from `.claude/skills/`, and reads `AGENTS.md` and `.github/copilot-instructions.md` too (`copilot skill list` and `copilot instruction list` show what it found) |
 | Codex | "set up Factory" — `AGENTS.md` points at the same file |
 
 **If you do not**, give your agent the one file first, then ask it in any directory:
 
 ```bash
+# GitHub Copilot — it takes a URL directly
+copilot skill add https://raw.githubusercontent.com/xaedalon/factory-community/main/skills/factory-setup/SKILL.md
+
 # Claude Code
 mkdir -p ~/.claude/skills/factory-setup && curl -fsSL \
   https://raw.githubusercontent.com/xaedalon/factory-community/main/skills/factory-setup/SKILL.md \

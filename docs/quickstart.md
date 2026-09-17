@@ -37,12 +37,11 @@ runs the CLI you already have, with the flags that CLI documents.
 A project is a repository Factory works in. Add one on the Projects page, or:
 
 ```bash
-curl -sS 127.0.0.1:7317/api/projects \
-  -H 'content-type: application/json' \
-  -d '{"name":"thing","path":"/Users/you/projects/thing"}'
+factory project add thing /full/path/to/thing     # --in-place for one task at a time
 ```
 
-The path is checked when you add it, not when a run fails half an hour later.
+The path is checked when you add it, not when a run fails half an hour later. Use `--in-place` for a
+repository where work should happen in the checkout itself rather than in a worktree per task.
 
 ## 3. Get a workflow
 

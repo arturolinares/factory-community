@@ -41,6 +41,7 @@ Usage
   factory task <action> <id>              queue, approve, reject, retry, cancel, done
   factory task depends <id> <on>          make one wait for another  (--remove)
 
+  factory project add <name> <path>       a repository to work in   (--in-place)
   factory project queue <name>            queue the lot, in dependency order
   factory project stop <name>             cancel whatever is in flight there
 
@@ -321,6 +322,13 @@ async function dispatch(
       const client = daemon ?? createDaemonClient(context.env)
       const [action, ...args] = rest
       const name = args.find((arg) => !arg.startsWith('--'))
+      if (action === 'add') {
+        const [projectName, path] = args.filter((arg) => !arg.startsWith('--'))
+        if (projectName === undefined || path === undefined) {
+          return usage('Which repository? Try "factory project add <name> <path>".')
+        }
+        return tasks.projectAdd(client, projectName, path, { inPlace: has(rest, '--in-place') }, style)
+      }
       if (action === 'queue' || action === 'stop') {
         if (name === undefined) {
           return usage(`Which project? Try "factory project ${action} <name>".`)
@@ -329,7 +337,7 @@ async function dispatch(
           ? tasks.projectQueue(client, name, style)
           : tasks.projectStop(client, name, style)
       }
-      return usage('Unknown project command. Try "queue" or "stop".')
+      return usage('Unknown project command. Try "add", "queue" or "stop".')
     }
 
     case 'run': {

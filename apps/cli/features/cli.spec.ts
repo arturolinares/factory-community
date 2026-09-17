@@ -1123,5 +1123,96 @@ describeFeature(feature, ({ Background, Rule, Scenario, AfterEachScenario }) => 
       Then('the exit code is 2', () => expect(result.exitCode).toBe(2))
       And('the output mentions "queue"', () => expect(output).toContain('queue'))
     })
+
+    const projectAcceptor = (scaffolded?: Record<string, unknown>) => (): void => {
+      asked = []
+      daemon = fakeDaemon((path, method) =>
+        path === '/api/projects' && method === 'POST'
+          ? {
+              project: { id: 'pr-9', name: 'work', path: '/repos/work', usesWorktrees: true },
+              ...(scaffolded === undefined ? {} : { scaffolded }),
+            }
+          : new DaemonError(404, `unexpected ${method} ${path}`),
+      )
+    }
+    const sentBody = () => asked.find((entry) => entry.method === 'POST')?.body as
+      | Record<string, unknown>
+      | undefined
+
+    RuleScenario('A repository can be added from the terminal', ({ Given, When, Then, And }) => {
+      Given('a daemon that accepts a project', projectAcceptor())
+      When('I run "project add work /repos/work"', () => invoke('project add work /repos/work'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says where it was added', () =>
+        expect(output).toContain('work added at /repos/work.'),
+      )
+      And('the daemon was told the name and the path', () =>
+        expect(sentBody()).toEqual({ name: 'work', path: '/repos/work' }),
+      )
+    })
+
+    RuleScenario('A project can be added to work in its own checkout', ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('a daemon that accepts a project', () => {
+        asked = []
+        daemon = fakeDaemon((path, method) =>
+          path === '/api/projects' && method === 'POST'
+            ? { project: { id: 'pr-9', name: 'work', path: '/repos/work', usesWorktrees: false } }
+            : new DaemonError(404, `unexpected ${method} ${path}`),
+        )
+      })
+      When('I run "project add work /repos/work --in-place"', () =>
+        invoke('project add work /repos/work --in-place'),
+      )
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output says work happens in that checkout', () =>
+        expect(output).toContain('one task runs at a time'),
+      )
+      And('the daemon was told not to use worktrees', () =>
+        expect(sentBody()).toEqual({ name: 'work', path: '/repos/work', usesWorktrees: false }),
+      )
+    })
+
+    RuleScenario('What scaffolding wrote is said out loud', ({ Given, When, Then, And }) => {
+      Given(
+        'a daemon that accepts a project and scaffolds two files',
+        projectAcceptor({ written: ['.xaedalon/.factory/workflows/worktree-create.workflow.yaml', '.xaedalon/.factory/phases/worktree.phase.yaml'], kept: [] }),
+      )
+      When('I run "project add work /repos/work"', () => invoke('project add work /repos/work'))
+      Then('it succeeds', () => expect(result.exitCode).toBe(0))
+      And('the output names both files', () => {
+        expect(output).toContain('worktree-create.workflow.yaml')
+        expect(output).toContain('worktree.phase.yaml')
+      })
+    })
+
+    RuleScenario("A path the repository refuses comes back in its own words", ({
+      Given,
+      When,
+      Then,
+      And,
+    }) => {
+      Given('a daemon that refuses the path', () => {
+        asked = []
+        daemon = fakeDaemon(
+          () => new DaemonError(400, '"/nowhere" is not a git repository.'),
+        )
+      })
+      When('I run "project add work /nowhere"', () => invoke('project add work /nowhere'))
+      Then('it fails', () => expect(result.exitCode).not.toBe(0))
+      And('the output says it is not a git repository', () =>
+        expect(output).toContain('not a git repository'),
+      )
+    })
+
+    RuleScenario('Adding a project needs a name and a path', ({ When, Then, And }) => {
+      When('I run "project add work"', () => invoke('project add work'))
+      Then('the exit code is 2', () => expect(result.exitCode).toBe(2))
+      And('the output mentions "<path>"', () => expect(output).toContain('<path>'))
+    })
   })
 })
