@@ -384,19 +384,33 @@ onUnmounted(() => store.disconnect())
           <p class="mt-1 font-mono text-[10px] text-[var(--color-ink-faint)]">
             {{ store.currentWorkflow(task) ?? 'no workflow' }}
           </p>
-          <!-- The interface reference ends every card with "0/7 phases  0%". The
-               board had no progress at all, which is the view most likely to be
-               open while something is running. -->
+          <!-- The interface reference ends every card with "0/7 phases  0%".
+               The bar is the same one the table draws, because without it a
+               card at 0% is a grey separator and two numbers nobody reads:
+               the count says how far along, the bar says how far there is to
+               go, and only one of those is visible at a glance. Full width
+               here rather than the table's fixed 24, since a column is
+               narrow. -->
           <div
             v-if="task.progress"
-            class="mt-2 flex items-center justify-between border-t border-[var(--color-line)] pt-1.5"
+            class="mt-2 border-t border-[var(--color-line)] pt-1.5"
+            :data-testid="`card-progress-${task.name}`"
           >
-            <span class="font-mono text-[10px] text-[var(--color-ink-faint)]">
-              {{ task.progress.completed }}/{{ task.progress.total }} phases
+            <span class="block h-1 overflow-hidden rounded-full bg-white/10">
+              <span
+                class="block h-full bg-[var(--color-accent)]"
+                :style="{ width: `${percent(task)}%` }"
+                :data-testid="`card-progress-fill-${task.name}`"
+              />
             </span>
-            <span class="font-mono text-[10px] text-[var(--color-ink-muted)]">
-              {{ percent(task) }}%
-            </span>
+            <div class="mt-1 flex items-center justify-between">
+              <span class="font-mono text-[10px] text-[var(--color-ink-muted)]">
+                {{ task.progress.completed }}/{{ task.progress.total }} phases
+              </span>
+              <span class="font-mono text-[10px] text-[var(--color-ink-muted)]">
+                {{ percent(task) }}%
+              </span>
+            </div>
           </div>
         </RouterLink>
       </section>

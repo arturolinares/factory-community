@@ -19,7 +19,7 @@ This document is the source of truth, written as the project is built.
 point a task at a repository, queue it, and the daemon gives it a worktree, runs the agents, keeps
 what they printed and what they produced, stops at the gate you asked for, and continues when you
 approve. From a terminal, from the board, or from Pro's desktop app — the same API either way.
-**5,449 Gherkin steps green below the browser** across 50 feature files and 1,112 scenarios, 155 of
+**5,449 Gherkin steps green below the browser** across 50 feature files and 1,114 scenarios, 157 of
 them in a real browser, and smoke runs against the real agent CLIs.
 
 Since increment 17 an agent is also **confined to the workspace it was given**, handed an

@@ -50,6 +50,24 @@ Feature: The task board
     And I switch to the board view
     Then "Add due dates" is in the "draft" column
 
+  Scenario: A card draws how far along the task is
+    Given the task "Add due dates" exists on "hello"
+    When I open the tasks page
+    And I switch to the board view
+    # The table has had a bar since the beginning and the card had two small
+    # numbers, so a queued task in the column view was a grey separator line
+    # and nothing a person reads at a glance.
+    Then the card for "Add due dates" says "0/1 phases"
+    And its bar is 0% full
+
+  Scenario: The card's bar fills as the work is done
+    Given the task "Add due dates" exists on "hello"
+    When I open the tasks page
+    And I queue "Add due dates"
+    And I switch to the board view
+    Then the card for "Add due dates" says "1/1 phases"
+    And its bar is 100% full
+
   Scenario: Queueing a task runs it, and the board follows
     Given the task "Add due dates" exists on "hello"
     When I open the tasks page

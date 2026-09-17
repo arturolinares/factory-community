@@ -716,6 +716,23 @@ Then('the board counts {int} task in total', async ({ page }, total: number) => 
   await expect(page.getByTestId('summary-total')).toContainText(String(total))
 })
 
+Then('the card for {string} says {string}', async ({ page }, name: string, text: string) => {
+  await expect(page.getByTestId(`card-progress-${name}`)).toContainText(text, { timeout: 15_000 })
+})
+
+/**
+ * The width, not the presence.
+ *
+ * A bar rendered at 0% and a bar that was never drawn look identical on
+ * screen, so asserting it exists would pass on either.
+ */
+Then('its bar is {int}% full', async ({ page }, percent: number) => {
+  await expect(page.getByTestId(/^card-progress-fill-/)).toHaveAttribute(
+    'style',
+    `width: ${percent}%;`,
+  )
+})
+
 Then('{string} is in the {string} column', async ({ page }, name: string, column: string) => {
   await expect(page.getByTestId(`column-${column}`).getByTestId(`card-${name}`)).toBeVisible()
 })
