@@ -70,11 +70,6 @@ From here nothing needs you until something does:
 
 The board updates as this happens. It is reading a live event stream, not polling.
 
-**List** reads many tasks at once; **Board** shows where the work is piled up. Both render from the
-same data, so neither can be showing something the other is not.
-
-![The board view: six tasks in columns by state, with phases done and per-cent complete on each card](images/columns.png)
-
 *Queue all* and *Stop all* appear in the header once a project is chosen — one queues every draft and
 blocked task in dependency order, the other halts everything in flight. See
 [`task-dependencies.md`](task-dependencies.md).

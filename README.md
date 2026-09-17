@@ -225,6 +225,6 @@ Found a boundary escape or a credential leak? [`SECURITY.md`](SECURITY.md) — p
 
 ## Licence
 
-Apache-2.0, Copyright 2026 Xaedalon. This is the whole product for a developer working alone, and it
+Apache-2.0, Copyright 2026 Alexander Duran. This is the whole product for a developer working alone, and it
 is meant to stay that way: commercial editions add capabilities through the plugin system and are not
 permitted to change the meaning of anything here.
