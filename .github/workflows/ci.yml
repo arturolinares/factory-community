@@ -43,6 +43,45 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
 
+  # The browser layer, which for eighteen increments ran nowhere but a laptop.
+  #
+  # It is the suite that has caught three defects nothing below it could: a
+  # disclaimer panel that sat over the board on load, an accept button that
+  # dismissed the panel without doing the thing it had refused, and a Queue all
+  # that queued nothing and said nothing. Every one of those passed the 5,457
+  # steps underneath. So a green CI without this job was a CI that could be
+  # wrong about the half of the product people look at.
+  #
+  # Serial by configuration (`workers: 1`), because the scenarios each start
+  # their own daemon, and Chromium only, which is what the config asks for.
+  # Nothing here needs an agent CLI installed: the fixtures spawn the daemon
+  # with an **empty PATH** on purpose, so provider availability is identical on
+  # a laptop with three agents and on a bare runner.
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24' }
+      - run: corepack enable pnpm
+      - run: pnpm install --frozen-lockfile
+      # The scenarios spawn the built daemon; Vite serves the page from source.
+      - run: pnpm build
+      - run: pnpm --filter @factory/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @factory/web test:e2e
+      # The report and the traces are the only way somebody who cannot
+      # reproduce a browser failure can see what the page looked like when it
+      # happened. `trace: 'retain-on-failure'` is already set in the config.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          retention-days: 7
+
   # What a newcomer actually does, run as a job so it cannot quietly rot: clone,
   # install, build, start the daemon, ask it for a page. The first public
   # version of this project shipped a `pnpm build` that did not build the board,

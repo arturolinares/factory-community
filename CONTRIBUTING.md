@@ -13,6 +13,13 @@ pnpm typecheck && pnpm lint && pnpm test          # all three, before you push
 pnpm --filter @factory/web test:e2e               # the browser suite, when you touch the board
 ```
 
+CI runs all four on every pull request — both platforms for the suite, the browser scenarios, and a
+first-run job that clones, builds and asks the daemon for a page. Running them locally first is
+faster than finding out from a red tick.
+
+Chromium needs installing once for the browser suite:
+`pnpm --filter @factory/web exec playwright install chromium`.
+
 Node 24 or newer. macOS or Linux; on Windows, work inside WSL2 — see
 [`docs/install.md`](docs/install.md).
 
