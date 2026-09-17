@@ -29,7 +29,14 @@ export default defineConfig({
   testDir,
   fullyParallel: false,
   workers: 1,
-  reporter: [['list']],
+  // `list` locally, and an HTML report as well under CI — where a failure is
+  // read by somebody who cannot reproduce it and needs the page, the trace and
+  // the step that broke. Claiming the CI job uploads a report while the
+  // reporter writes none would be the same defect this project keeps finding:
+  // a thing declared and never exercised.
+  reporter: process.env.CI === undefined
+    ? [['list'] as const]
+    : [['list'] as const, ['html', { open: 'never' }] as const],
   timeout: 30_000,
   use: {
     baseURL: `http://127.0.0.1:${WEB_PORT}`,
