@@ -62,7 +62,8 @@ jobs:
         run: test -f apps/web/dist/index.html
       - name: a user scope can be created
         run: node apps/cli/dist/bin.js init --scope user
-        env: { FACTORY_HOME: ${{ runner.temp }}/.xaedalon/.factory }
+        env:
+          FACTORY_HOME: ${{ runner.temp }}/.xaedalon/.factory
       - name: the daemon serves the board it just built
         env:
           FACTORY_HOME: ${{ runner.temp }}/.xaedalon/.factory
