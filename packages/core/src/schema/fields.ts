@@ -5,7 +5,7 @@ import type { Agent } from './agent.js'
 /**
  * The field tables.
  *
- * xfactory's serializer was a hand-typed object literal, so every field added
+ * The prototype's serializer was a hand-typed object literal, so every field added
  * to the reader afterwards was permanently missing from the writer: saving a
  * workflow silently stripped its `conditions` and `on_fail`. Diligence cannot
  * fix a shape like that -- nothing connects the two halves, so nothing can

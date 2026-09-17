@@ -213,8 +213,16 @@ factory accept --show    # exactly what you are agreeing to
 factory stop --all       # stop every agent, and cancel its task
 ```
 
+## Contributing
+
+The rules here are unusual and load-bearing — the `.feature` files *are* the specification, every
+guard is broken and watched to fail before it is trusted, and the open core never imports commercial
+code. [`CONTRIBUTING.md`](CONTRIBUTING.md) explains each one and what it cost to learn.
+
+Found a boundary escape or a credential leak? [`SECURITY.md`](SECURITY.md) — privately, please.
+
 ## Licence
 
-Apache-2.0. This is the whole product for a developer working alone, and it is meant to stay that
-way: commercial editions add capabilities through the plugin system and are not permitted to change
-the meaning of anything here.
+Apache-2.0, Copyright 2026 Xaedalon. This is the whole product for a developer working alone, and it
+is meant to stay that way: commercial editions add capabilities through the plugin system and are not
+permitted to change the meaning of anything here.

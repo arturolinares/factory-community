@@ -5,7 +5,7 @@ import type { Problem } from '../problems.js'
  * Shared schema pieces, and the bridge from zod's issues to Factory's Problem.
  *
  * The point of this file is that a mistake in a YAML file produces a message a
- * person can act on, naming the field they typed. xfactory had no schema at
+ * person can act on, naming the field they typed. The prototype had no schema at
  * all: `type: banana` was cast straight to the union type and silently kept, an
  * unknown key was ignored, and an agent block missing its prompt was dropped so
  * the phase ran nothing and reported success.

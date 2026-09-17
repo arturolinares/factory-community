@@ -126,7 +126,7 @@ const superseded = <T extends z.ZodType>(schema: T, options?: string): T =>
   }) as T
 
 const agentSchema = closedWithExtensions({
-  // The single most important line in this file. xfactory dropped an agent
+  // The single most important line in this file. The prototype dropped an agent
   // block whose prompt was missing or blank, so the phase ran nothing at all
   // and reported success. Here it is an error that names the field.
   prompt: z

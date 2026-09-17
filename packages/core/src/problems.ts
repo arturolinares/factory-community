@@ -3,7 +3,7 @@
  *
  * One shared vocabulary for every producer — the schema, hooks, doctor rules,
  * the YAML parser — so the CLI, the daemon and the builder's error list all
- * render the same shape. xfactory had no such type: validation either threw an
+ * render the same shape. The prototype had no such type: validation either threw an
  * opaque Error or silently substituted a default, which is why `type: banana`
  * passed and an agent block with no prompt vanished without a word.
  */

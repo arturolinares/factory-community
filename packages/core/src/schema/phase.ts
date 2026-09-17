@@ -13,7 +13,7 @@ export const PHASE_KIND = 'factory.phase/v1'
 /**
  * Whether a human is asked about this phase, and when.
  *
- * xfactory called this `type: auto | inspect`. "inspect" described what the
+ * The prototype called this `type: auto | inspect`. "inspect" described what the
  * operator does, not what Factory does, and "type" said nothing at all.
  *
  * `required` said only *whether*, and there are two different questions people
@@ -47,7 +47,7 @@ const phaseShape = {
   /**
    * Working directory for every step, relative to the resolved workspace.
    *
-   * Documented in xfactory's README and parsed by nothing, so it silently did
+   * Documented in the prototype's README and parsed by nothing, so it silently did
    * nothing for anyone who used it. Implemented here.
    */
   working_dir: z.string().min(1).optional(),

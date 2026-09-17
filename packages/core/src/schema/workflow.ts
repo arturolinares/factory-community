@@ -17,7 +17,7 @@ export type WorkflowMode = (typeof WORKFLOW_MODES)[number]
  * How this workflow is scheduled against *other tasks* -- not against its own
  * phases, which are always sequential.
  *
- * Renamed from xfactory's `concurrency`, which was the single most misread
+ * Renamed from the prototype's `concurrency`, which was the single most misread
  * field in the schema: it reads as "can these phases run in parallel", and the
  * answer to that question is always no.
  */
@@ -168,7 +168,7 @@ export function parseWorkflow(
   const problems: Problem[] = []
 
   // Cross-field rules zod cannot express as a single field constraint. Stated
-  // here rather than left to documentation, which is how xfactory ended up
+  // here rather than left to documentation, which is how the prototype ended up
   // with `interval` that only applied sometimes and `working_dir` that never
   // applied at all.
   if (value.repeat !== undefined && value.mode !== 'loop') {

@@ -5,3 +5,16 @@ dist/
 .features-gen/
 test-results/
 playwright-report/
+
+# Build output of a packaged desktop app — Pro's, never Community's, but a
+# working tree may hold both and neither belongs in a commit.
+release/
+build/
+
+# A scope's *definitions* are meant to be committed; its state is not. The
+# daemon writes tasks, runs and logs here when a scope is used in place.
+**/.xaedalon/.factory/state/
+
+*.log
+.env
+.env.*

@@ -91,7 +91,7 @@ export async function checkPluginConformance(plugin: FactoryPlugin): Promise<Con
   // Second load into a *fresh* host. A plugin holding module-level mutable
   // state -- a cache, a "registered already" flag, a singleton built at import
   // -- will differ here. That bug is invisible in a single-host test and then
-  // breaks the daemon on reload, which is exactly how xfactory's hot-reload
+  // breaks the daemon on reload, which is exactly how the prototype's hot-reload
   // path grew its edge cases.
   const second = new CapabilityHost({ events: new EventBus({ onSubscriberError: () => {} }) })
   let repeatError: unknown

@@ -22,7 +22,13 @@ the profile every project gets, and it is short.
 | [`full-access.md`](security/full-access.md) | What turning the boundary off means, and how you are reminded |
 | [`workspace-boundary.md`](security/workspace-boundary.md) | What counts as inside — and what is not enforced |
 | [`providers.md`](security/providers.md) | Per agent CLI: what it confines, what Factory adds, what has been measured |
-| [`execution-profiles.md`](security/execution-profiles.md) | The standard this is being built against. A target, not a description |
+
+## Where this is going
+
+| | |
+|---|---|
+| [`proposals/execution-profiles.md`](proposals/execution-profiles.md) | The safety standard Factory is being built against. **A target, not a description** — most of it is not built. It lives under `proposals/` so the path says so. |
+
 
 ## Elsewhere
 

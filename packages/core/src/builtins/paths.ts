@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
  * Where the definitions Factory ships with live.
  *
  * Located relative to this module, not by climbing from the process's working
- * directory. xfactory computed its root as `join(__dirname, '../../../..')`,
+ * directory. The prototype computed its root as `join(__dirname, '../../../..')`,
  * which is meaningless under a global install, a pnpm store layout, or a
  * bundled binary — and it silently disagreed with the other anchor it used
  * everywhere else. A package finding its own files is the only form that

@@ -12,7 +12,7 @@ export const PROVIDER_KIND = 'provider'
 /**
  * A rendered command, as argv rather than a shell string.
  *
- * xfactory built a command line by concatenating strings and then handed it to
+ * The prototype built a command line by concatenating strings and then handed it to
  * `bash -c`, which means every prompt containing a quote is a latent quoting
  * bug. An agent step has no reason to involve a shell at all — the arguments
  * are known, so pass them directly.

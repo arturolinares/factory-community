@@ -620,7 +620,7 @@ edition builds on:
   accepts `security.profile`; `PATCH /api/projects/:id` accepts `profile`
   (`null` clears it); `GET /api/tasks/:id` runs carry `profile`.
 
-Deferred deliberately, and named in `docs/security/execution-profiles.md`:
+Deferred deliberately, and named in `docs/proposals/execution-profiles.md`:
 network policy, secrets as resources, database policy, execution limits,
 checkpoints, custom profiles, MCP resources, multi-root workspaces and
 production labelling.
@@ -840,6 +840,11 @@ moving `factory-pro/` aside and running the whole suite without it.
 
 Gherkin lives beside the contract it specifies. This index is the one place to read the whole spec.
 
+Two rows name features in the commercial workspace, which is a separate and private repository. They
+are listed because the boundary is only meaningful if both halves are accounted for — Pro passes the
+same conformance suite through the same plugin host — and marked so nobody goes looking for a file
+this repository does not contain.
+
 | Feature | Contract |
 |---|---|
 | `packages/events/features/event-bus.feature` | Delivery, isolation of a throwing subscriber, unsubscribe semantics |
@@ -874,8 +879,8 @@ Gherkin lives beside the contract it specifies. This index is the one place to r
 | `packages/core/features/processes.feature` | Stopping what Factory started: the group not the process, proved on a real grandchild |
 | `packages/core/features/denials.feature` | Noticing an agent was refused something, from the wordings its CLI actually prints |
 | `packages/core/features/task-dependencies.feature` | One task waiting for another: met, waiting, dead; the queue order; a ring caught |
-| `factory-pro/…/desktop-capability.feature` | Pro is a plugin: same host, same suite, no core changes |
-| `factory-pro/packages/desktop/features/shell.feature` | The desktop shell: attach or start, the menu bar, what is worth a notification |
+| Pro's `desktop-capability.feature` *(not in this repository)* | Pro is a plugin: same host, same suite, no core changes |
+| Pro's `shell.feature` *(not in this repository)* | The desktop shell: attach or start, the menu bar, what is worth a notification |
 | `packages/store/features/store.feature` | Migrations, transactions, and the guards around both |
 | `packages/store/features/tasks.feature` | The task lifecycle: one table of moves, what each state offers, what changing the plan does to its place in it, one task waiting for another, and finishing one by hand |
 | `packages/store/features/runs.feature` | Runs, their steps, and output kept inside a budget |

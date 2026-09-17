@@ -9,7 +9,7 @@ import tseslint from 'typescript-eslint'
  *     pnpm-workspace.yaml already makes it unresolvable; this makes it a lint
  *     error too, so the intent is visible at the point of violation.
  *
- *  2. The single path resolver. xfactory computed paths from two disagreeing
+ *  2. The single path resolver. The prototype computed paths from two disagreeing
  *     anchors (a __dirname climb and process.cwd()) in ~19 places, which
  *     coincided only under systemd. Every path in Factory flows from
  *     packages/config/src/scopes.ts, and nothing else may ask the OS directly.

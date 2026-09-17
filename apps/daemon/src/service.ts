@@ -326,7 +326,7 @@ export async function createService(
  * What a recovery workflow is told about the failure that called it.
  *
  * Exposed as `{{ project.* }}` because that scope already exists and is meant
- * for facts about the surroundings rather than about the definition. xfactory
+ * for facts about the surroundings rather than about the definition. The prototype
  * spelled these `{{ requirement.lastFailureReason }}`; the names are the same
  * ideas under the vocabulary this project settled on.
  */

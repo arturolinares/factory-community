@@ -17,12 +17,12 @@
 >
 > For what is true today, and the limits of it:
 >
-> - [`default-profile.md`](default-profile.md) — what an agent may do, and what
+> - [`default-profile.md`](../security/default-profile.md) — what an agent may do, and what
 >   it may not
-> - [`full-access.md`](full-access.md) — what turning the boundary off means
-> - [`workspace-boundary.md`](workspace-boundary.md) — what counts as inside,
+> - [`full-access.md`](../security/full-access.md) — what turning the boundary off means
+> - [`workspace-boundary.md`](../security/workspace-boundary.md) — what counts as inside,
 >   and what is *not* enforced
-> - [`providers.md`](providers.md) — per agent CLI: how much of the confinement
+> - [`providers.md`](../security/providers.md) — per agent CLI: how much of the confinement
 >   is theirs, how much is Factory's, and which of it has actually been measured
 >
 > Sections 1–5, 8–9, 15–16, 19–21, 23–25, 28–30, 40 and 44–46 are wholly or
@@ -1370,7 +1370,7 @@ Keep it visually distinct.
 Public documentation should include:
 
 ```text
-/docs/security/execution-profiles.md
+/docs/proposals/execution-profiles.md
 /docs/security/default-profile.md
 /docs/security/full-access.md
 /docs/security/workspace-boundary.md

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A security problem
+    url: https://github.com/xaedalon/factory-community/security/advisories/new
+    about: Report a boundary escape or a credential leak privately, not as an issue.

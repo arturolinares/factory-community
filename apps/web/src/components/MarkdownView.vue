@@ -10,8 +10,7 @@ import { Marked, Renderer } from 'marked'
  * one: artifact text comes out of a language model, so it is untrusted input in
  * the ordinary sense — `<img src=x onerror=…>` in an analysis document must be
  * something you read, not something that runs. The prototype this follows
- * (`~/projects/xfactory`) renders the same content through `v-html` with no
- * sanitiser at all, which is the half of it not worth copying.
+ * renders the same content through `v-html` with no sanitiser at all, which is the half of it not worth copying.
  *
  * So: parse, sanitise, then set. Keeping it in one component means there is one
  * place to check that, rather than a rule everybody has to remember.
