@@ -19,8 +19,9 @@ This document is the source of truth, written as the project is built.
 point a task at a repository, queue it, and the daemon gives it a worktree, runs the agents, keeps
 what they printed and what they produced, stops at the gate you asked for, and continues when you
 approve. From a terminal, from the board, or from Pro's desktop app — the same API either way.
-**5,449 Gherkin steps green below the browser** across 50 feature files and 1,114 scenarios, 157 of
-them in a real browser, and smoke runs against the real agent CLIs.
+**5,457 Gherkin steps green below the browser** across 50 feature files, 157 of them in a real
+browser, and smoke runs against the real agent CLIs. Every one of those runs in CI, on macOS and
+Linux, alongside a job that installs from a clean clone and asks the daemon for a page.
 
 Since increment 17 an agent is also **confined to the workspace it was given**, handed an
 environment with the credentials taken out, and stoppable — process tree and all. What that
@@ -718,6 +719,65 @@ scheduler suite until a scenario gave one dependent two blockers, one cancelled
 and one still running. The ring walk had a real bug that a scenario found:
 `queueOrder` follows only the edges inside the set it is given, so checking
 `[id]` alone walked straight past a ring three tasks long.
+
+## Launch preparation — what an audit found
+
+| # | What | State |
+|--:|------|-------|
+| 86 | **The documented first five minutes**, which did not work | ✅ done |
+| 87 | **A platform promise with evidence behind it**: macOS and Linux in CI, Windows via WSL2 | ✅ done |
+| 88 | **The browser suite in CI**, after eighteen increments on one laptop | ✅ done |
+| 89 | **Public hygiene**: nothing cited that a reader cannot open | ✅ done |
+| 90 | **The furniture**: contributing, security, conduct, templates, install, notice | ✅ done |
+
+Before making Community public, the repository was audited against its own
+tree, its full history and — the part that mattered — **a clean clone driven by
+the commands the README gives**. That last one is the only check that found
+anything serious, and it found the worst defect in the project:
+
+```
+pnpm install --frozen-lockfile   ok
+pnpm build                       ok
+  MISSING  apps/web/dist/index.html
+GET /  → 404 {"message":"Route GET:/ not found",…}
+```
+
+The root `tsconfig` references `apps/cli` and `apps/daemon`; the board is built
+by vite, and nothing invoked it. So `pnpm build` produced an engine and no
+board, and the README's third sentence — "a web interface served from the same
+process" — was false for every person who had ever followed the README. The
+daemon knew: it printed *"the board is not built"* at startup, to a log nobody
+reads, and then let Fastify answer `/` with its own JSON 404.
+
+**Every test passed straight over it.** 5,457 steps below the browser, 157 in a
+browser, and not one of them ran the documented commands in order. The lesson
+is the increment-17 lesson at the level of the product rather than the code: a
+guarantee nobody has watched fail is not a guarantee, and *"it installs
+cleanly"* is a guarantee. There is now a `first-run` CI job that clones,
+installs, builds, starts the daemon and asks it for a page.
+
+`engines.node` said `>=20.11` while the store imported `node:sqlite`, which
+does not exist before 22.5 — a crash at import rather than a version error, for
+anybody on Node 20. Now `>=24`, which is what CI runs.
+
+**The platform promise is measured, not asserted.** CI runs the suite on ubuntu
+**and macos**; Windows is deliberately absent, because every shell step is
+`bash -c` and stopping work signals a process group, so WSL2 is the honest
+answer and `docs/install.md` says so rather than implying three platforms work.
+
+**The browser suite now runs in CI.** It had never run anywhere but a laptop,
+and it is the suite that caught three defects nothing below it could. No
+fixture changes were needed — each scenario already started its own daemon with
+an empty PATH, precisely so provider availability would be identical on a bare
+runner. It had simply never been taken up on the offer.
+
+**Hygiene.** Fourteen comments cited the prototype by a name only one machine
+can resolve, including an absolute path in a Vue component; they say "the
+prototype" now. Two rows of the specification index named feature files in the
+commercial repository and are labelled *(not in this repository)*. A 1,687-line
+aspirational standard moved to `docs/proposals/`, so its path says what its
+banner always said. No token-shaped string appears in any commit of the
+history; no absolute home path does either.
 
 ## Glossary
 
