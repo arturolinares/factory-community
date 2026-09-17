@@ -10,6 +10,8 @@ key: it runs the CLI you already have, the way you already run it.
 It is local-first. One process on your machine, a SQLite file for what happened, and a web interface
 served from the same process. Nothing leaves the machine unless a step you wrote sends it.
 
+![The task board: six tasks in one project, three finished, one waiting for another, one blocked by a failing test](docs/images/board.png)
+
 ```bash
 pnpm install
 pnpm build                                        # engine, CLI and board

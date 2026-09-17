@@ -8,7 +8,11 @@ plan. Dependencies order *tasks*.
 
 ## Making one wait
 
-On the task page, under **Waits for**, choose a task and press *Wait for it*. From a terminal:
+On the task page, under **Waits for**, choose a task and press *Wait for it*:
+
+![The Waits for section: Task 4 done, Task 6 not yet, with a picker to add another](images/task.png)
+
+From a terminal:
 
 ```bash
 factory task depends <id> <waits-for-id>            # the second one has to finish first
