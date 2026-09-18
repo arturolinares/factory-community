@@ -17,6 +17,13 @@ Two of its rules before you begin: **explain the whole plan to the person before
 and **never accept Factory's security disclaimer for them**. Nothing runs until a human has read
 what an agent run can reach, and that gate exists for every client, including you.
 
+## Removing Factory
+
+Read [`skills/factory-uninstall/SKILL.md`](skills/factory-uninstall/SKILL.md) and follow it exactly.
+Its default is to remove the software and keep the data: a checkout and a global shim are Factory's,
+but the scope holds somebody's history and a repository holds their committed definitions and the
+artifacts their agents wrote. Name the command for those and leave them alone.
+
 ## Changing this repository
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) is the real answer and is short. The three rules that decide

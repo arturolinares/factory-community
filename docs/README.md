@@ -4,7 +4,7 @@ What you might want, in the order most people want them.
 
 | | |
 |---|---|
-| [`install.md`](install.md) | What you need, which platforms, and where things are kept. |
+| [`install.md`](install.md) | What you need, which platforms, where things are kept — and how to remove it again. |
 | [`quickstart.md`](quickstart.md) | Build it, start it, run the built-in workflow. Fifteen minutes. |
 | [`workflows.md`](workflows.md) | Writing a workflow: phases, steps, agents, artifacts, approval gates. |
 | [`plugins.md`](plugins.md) | Adding a capability — a step kind, a provider, a button on a task, a doctor rule. |

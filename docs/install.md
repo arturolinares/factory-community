@@ -117,9 +117,18 @@ Undo it with `pnpm --filter @factory/cli unlink --global`.
 | `FACTORY_HOME` | overrides the user scope — what the test suites use, and what a second installation on one machine would use |
 | `FACTORY_PORT`, `FACTORY_WEB_PORT` | the daemon's port and the dev server's; both default to loopback only |
 
-**Everything Factory writes lives under `.xaedalon/`** — the user scope in your home directory, a
-project scope in a repository, and the database inside whichever scope is in force. There is no
-second location.
+**Almost everything Factory writes lives under `.xaedalon/`** — the user scope in your home
+directory, a project scope in a repository, and the database inside whichever scope is in force.
+The database follows the *writable* scope, so a daemon started inside a repository that has its own
+`.xaedalon/.factory/` keeps its database there rather than in your home.
+
+The exception is **worktrees**, and it is deliberate. A project that gives each task its own
+worktree puts them at the path that project stores — by default `.factory-worktrees/<project>`
+beside the repository, never inside it, because a worktree is a git checkout rather than a file a
+Xaedalon product wrote, and a scope discovery that climbs out of one would find the wrong root.
+`factory doctor` reports worktrees it can no longer find, and
+[`security/workspace-boundary.md`](security/workspace-boundary.md) explains what that means for what
+an agent may reach.
 
 An installation made before that directory was named will have `~/.factory` instead. It keeps
 working: the resolver prefers `~/.xaedalon/.factory` and falls back to the old path when only that
@@ -129,6 +138,28 @@ again. A project scope moves the same way with `git mv`.
 
 Nothing listens on anything but `127.0.0.1`, deliberately. A tool that runs coding agents against
 your repositories has no business being reachable from the network.
+
+## Uninstalling
+
+```bash
+factory stop --all        # agents first: cancelling is what kills their process groups
+                          # then quit the desktop app if you have one, and stop the daemon
+rm -rf <the checkout>
+```
+
+That is the software. Your **data is a separate decision**, and Factory will not make it for you:
+
+| | |
+|---|---|
+| the scope | `factory config path` says where it is. `rm -rf <scope>` takes your definitions, settings, accepted notice, any Pro licence, and every task and run — the database holds the only copy of run logs and evidence. |
+| a repository's `.xaedalon/` | your files. Some are committed: `git ls-files .xaedalon` says which, and they go with a commit, not an `rm`. |
+| artifacts | `<repo>/.xaedalon/.factory/tasks/*/artifacts/` — what the agents wrote, and usually the reason to keep a run. |
+| worktrees | only if that project uses them, at the path it stores. `git worktree list`, then `git worktree remove` — never `rm -rf`, which leaves `.git/worktrees/` behind. The branches stay; they are your work. |
+
+Or ask your agent: **`/factory-uninstall`** in Claude Code, "uninstall Factory" in Copilot or Codex.
+The runbook is [`../skills/factory-uninstall/SKILL.md`](../skills/factory-uninstall/SKILL.md) — it
+takes an inventory before it stops anything, removes only what Factory installed, and prints the
+command for everything that is yours.
 
 ## Upgrading
 
