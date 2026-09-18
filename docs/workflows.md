@@ -220,3 +220,18 @@ is ignored by the `.gitignore` `factory init` writes.
 The same name in two scopes is not an error: the higher one wins, and the fact that it hides another
 is reported by `factory why <name>` and by `doctor`. Commit `.xaedalon/.factory` and the workflow travels
 with the repository.
+
+**Travels, and arrives by itself.** A chain is resolved per *project*, from the path that project
+points at — not from the directory the daemon was started in. So adding a repository as a project is
+the whole step: its committed workflows, phases and agents are available to its tasks immediately,
+with nothing to import, and `factory workflow list` prints `project` beside each. A repository that
+gains a scope later is picked up on the next request rather than needing a restart.
+[`xaedalon/sample-todolist`](https://github.com/xaedalon/sample-todolist) is a repository that does
+this — clone it, add it, and its five-workflow pipeline is there.
+
+What does **not** travel is settings: whether a project uses worktrees or environments, its execution
+profile and its default branch are per-installation choices kept in Factory's database and set when
+the project is added. Two people cloning one repository can want different answers. Plugins and
+provider paths *are* declared in a scope's `config.yaml` (see [`plugins.md`](plugins.md)), but they
+are loaded once when the daemon starts and apply installation-wide — a project may define its own
+workflows, phases and agents, not its own plugins.
