@@ -143,9 +143,15 @@ your repositories has no business being reachable from the network.
 
 ```bash
 factory stop --all        # agents first: cancelling is what kills their process groups
-                          # then quit the desktop app if you have one, and stop the daemon
+                          # then quit the desktop app if you have one
+kill "$(lsof -ti:7317 -sTCP:LISTEN)"   # the daemon: the one process listening on its port
 rm -rf <the checkout>
 ```
+
+`-sTCP:LISTEN` matters. Without it, `lsof -ti:7317` also lists everything *connected* to the
+daemon — a browser tab on the board is one, and each of the desktop application's helpers is
+another — so the bare form has four pids on a machine with both open, and `kill` would take the
+browser with it.
 
 That is the software. Your **data is a separate decision**, and Factory will not make it for you:
 

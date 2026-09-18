@@ -62,6 +62,7 @@ node apps/cli/dist/bin.js config path            # every scope, and which is wri
 curl -sf http://127.0.0.1:7317/api/projects      # each project: path, usesWorktrees, worktreesRoot
 curl -sf http://127.0.0.1:7317/api/tasks         # what is running, and what is queued
 command -v factory; pnpm ls -g --depth 0 2>/dev/null | grep -i factory
+lsof -ti:7317 -sTCP:LISTEN                       # is a daemon running at all
 ```
 
 Take the paths from those answers rather than from this document. The scope is not always
@@ -106,21 +107,28 @@ Then quit the desktop application if one is running — it holds the daemon — 
 itself. **Find it by the port it holds:**
 
 ```bash
-lsof -ti:7317                 # exactly one pid: nothing else binds Factory's port
-kill "$(lsof -ti:7317)"
+lsof -ti:7317 -sTCP:LISTEN               # the one process listening: the daemon
+kill "$(lsof -ti:7317 -sTCP:LISTEN)"
 curl -sf http://127.0.0.1:7317/api/health    # must fail now
-lsof -ti:7317                                # must print nothing
+lsof -ti:7317 -sTCP:LISTEN                   # must print nothing
 ```
 
-Not by a recorded pid and not by a pattern, both of which were tried here and both of which killed
-the wrong thing:
+**`-sTCP:LISTEN` is load-bearing, and leaving it off has already picked the wrong process.** Without
+it, `lsof -ti:7317` lists every process holding *any* socket on that port — which includes each
+connected client. Measured on a machine with the desktop application open and the board open in a
+browser: four pids, one of them **Google Chrome Helper**, and `kill "$(lsof -ti:7317)"` would have
+taken the browser with it. The desktop app contributes several of its own, because Electron's
+helpers inherit the descriptor. With the flag, one pid — the listener.
+
+Not by a recorded pid and not by a pattern either, both of which were tried here and both of which
+killed the wrong thing:
 
 - a pid file written as `… &` then `echo $!` **after a compound command** holds the *shell's* pid,
   not node's, so the signal goes to a wrapper and the daemon carries on;
 - `pgrep -f "apps/daemon/dist/bin.js"` matches **any process whose command line mentions that
   string** — including the shell running these very instructions, which is what it matched.
 
-The port is unambiguous because the daemon is the thing bound to it.
+The listening socket is unambiguous because only one process can hold it.
 
 Stopping before touching the database is not tidiness. The store runs in WAL mode, so while it runs
 there is a `factory.db-wal` and a `factory.db-shm` beside it. **A clean stop checkpoints them away** —
